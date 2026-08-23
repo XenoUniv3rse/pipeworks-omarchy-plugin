@@ -9,7 +9,7 @@ top bar or from real faders and buttons.
 ## Install
 
 ```sh
-omarchy plugin add https://github.com/ebirkhoff/Pipeworks-Omarche-Pluging.git --enable
+omarchy plugin add https://github.com/ebirkhoff/pipeworks-omarchy-plugin.git --enable
 omarchy bar put pipeworks.mixer --before omarchy.audio
 ```
 
