@@ -8,6 +8,7 @@ the domain layer.
 import copy
 import json
 import os
+import tempfile
 
 from . import settings
 
@@ -98,9 +99,30 @@ class ConfigRepository:
         )
 
     def save(self, config):
-        os.makedirs(os.path.dirname(self._path), exist_ok=True)
-        with open(self._path, "w") as handle:
-            json.dump(config, handle, indent=2)
+        """Writes the config atomically.
+
+        A plain truncate-and-write is visible to readers midway through: file
+        watchers fire on the truncation and parse a half-written file. The
+        Omarchy bar widget watches this file, so a torn read there blanked the
+        panel and rebuilt it on every volume tick, which reads as flicker.
+        Writing a sibling temp file and renaming it means a reader sees either
+        the old contents or the new ones, never a partial.
+        """
+        directory = os.path.dirname(self._path)
+        os.makedirs(directory, exist_ok=True)
+        handle, temp_path = tempfile.mkstemp(dir=directory, prefix=".config.", suffix=".json")
+        try:
+            with os.fdopen(handle, "w") as stream:
+                json.dump(config, stream, indent=2)
+            # mkstemp is 0600; keep the file's usual permissions rather than
+            # silently tightening them on the first save.
+            os.chmod(temp_path, 0o644)
+            os.replace(temp_path, self._path)
+        except BaseException:
+            # Never leave a stray temp file behind for the watcher to trip over.
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
 
     @staticmethod
     def _migrate(config):

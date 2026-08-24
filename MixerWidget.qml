@@ -39,9 +39,14 @@ BarWidget {
   property var config: ({})
   property bool loaded: false
 
-  readonly property var channels: config.channels instanceof Array ? config.channels : []
-  readonly property var inputs: config.inputs instanceof Array ? config.inputs : []
-  readonly property var outputs: config.outputs instanceof Array ? config.outputs : []
+  // Repeater models. Reassigning these rebuilds every delegate, so they are
+  // only replaced when the set of strips actually changes - not on every
+  // volume tick, which would otherwise tear the whole panel down and rebuild
+  // it several times a second while a fader moves.
+  property var inputs: []
+  property var channels: []
+  property var outputs: []
+  property string structure: ""
   readonly property var volumes: config.volume || ({})
   readonly property var mutes: config.muted || ({})
   readonly property var outputVolumes: config.output_volume || ({})
@@ -72,17 +77,49 @@ BarWidget {
     watchChanges: true
     printErrors: false
     onLoaded: root.parseConfig(text())
-    onLoadFailed: root.loaded = false
+    // Only report unavailable if nothing has ever loaded; a failure after
+    // that is transient and the last good state stays on screen.
+    onLoadFailed: if (root.structure === "") root.loaded = false
     onFileChanged: reload()
   }
 
   function parseConfig(raw) {
+    var next
     try {
-      root.config = JSON.parse(raw)
-      root.loaded = true
+      next = JSON.parse(raw)
     } catch (error) {
-      root.loaded = false
+      // Keep showing the last good state; a bad read is transient and
+      // blanking the panel for it is worse than being briefly stale.
+      return
     }
+
+    root.config = next
+    root.loaded = true
+
+    var signature = root.structureSignature(next)
+    if (signature !== root.structure) {
+      root.structure = signature
+      root.inputs = next.inputs instanceof Array ? next.inputs : []
+      root.channels = next.channels instanceof Array ? next.channels : []
+      root.outputs = next.outputs instanceof Array ? next.outputs : []
+    }
+  }
+
+  // Identifies which strips exist and what they are called. Values are
+  // deliberately excluded: they update through `config` without touching the
+  // models.
+  function structureSignature(candidate) {
+    function describe(list) {
+      if (!(list instanceof Array)) return ""
+      var parts = []
+      for (var i = 0; i < list.length; i++) {
+        var entry = list[i] || ({})
+        parts.push(String(entry.id) + "\u001f" + String(entry.label))
+      }
+      return parts.join(",")
+    }
+    return describe(candidate.inputs) + "|" + describe(candidate.channels)
+      + "|" + describe(candidate.outputs)
   }
 
   // --------------------------------------------------------------- actions
