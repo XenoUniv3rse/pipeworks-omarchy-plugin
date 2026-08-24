@@ -53,6 +53,9 @@ BarWidget {
   readonly property var outputVolumes: config.output_volume || ({})
   readonly property var outputMutes: config.output_muted || ({})
   readonly property var routes: config.routes || ({})
+  // Levels reserved to the control surface. Faders stay visible but inert, so
+  // it is obvious why they do not move rather than them seeming broken.
+  readonly property bool volumeLocked: config.volume_locked === true
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color barForegroundColor: bar ? bar.barForeground : Color.foreground
@@ -359,6 +362,21 @@ BarWidget {
           Button {
             visible: root.available
             Layout.fillWidth: true
+            text: root.volumeLocked ? "Volume: MIDI only" : "Volume: software + MIDI"
+            iconText: root.volumeLocked ? "\U000f033e" : "\U000f0fc6"
+            fontSize: Style.font.bodySmall
+            foreground: root.volumeLocked ? root.urgent : root.dim
+            fontFamily: root.fontFamily
+            bordered: true
+            tooltipText: root.volumeLocked
+              ? "Levels answer only to the control surface. Click to allow software changes."
+              : "Click to reserve levels to the control surface."
+            onClicked: root.activate("toggle-volume-lock", "[]")
+          }
+
+          Button {
+            visible: root.available
+            Layout.fillWidth: true
             text: "Open mixer"
             iconText: "󰘮"
             fontSize: Style.font.bodySmall
@@ -483,6 +501,8 @@ BarWidget {
       PanelSlider {
         Layout.fillWidth: true
         bar: root.bar
+        enabled: !root.volumeLocked
+        opacity: root.volumeLocked ? 0.45 : 1.0
         minimum: 0
         maximum: 100
         step: 2

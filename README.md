@@ -56,6 +56,24 @@ Each strip carries a horizontal level meter under its fader, showing what that
 strip is actually playing. Meters run only while the panel is open, so a closed
 panel costs nothing.
 | "Open mixer" | Open the full window |
+| "Volume: …" button | Toggle MIDI-only volume |
+
+## MIDI-only volume
+
+If you would rather levels answered only to the control surface, turn on
+**MIDI-only volume** — the toggle at the bottom of the panel, or the "MIDI-only
+volume" checkbox in the mixer window:
+
+```sh
+gdbus call --session --dest io.github.pipeworks.Pipeworks \
+  --object-path /io/github/pipeworks/Pipeworks \
+  --method org.gtk.Actions.Activate "set-volume-lock" "[<true>]" "{}"
+```
+
+Faders in both the panel and the window stay visible but go inert and dim, so it
+is obvious the level is reserved rather than broken. Mute, solo and routing keep
+working from software either way, and the setting persists in
+`~/.config/pipeworks/config.json` as `volume_locked`.
 
 The bar icon highlights whenever anything is muted, which is usually the answer
 to "why can I not hear this".

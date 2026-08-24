@@ -220,13 +220,36 @@ class Mixer:
     # ------------------------------------------------------------------
     # Volume
 
-    def set_volume(self, strip_id, percent):
+    @property
+    def volume_locked(self):
+        """Whether levels are reserved to the control surface."""
+        return bool(self.config.get("volume_locked", False))
+
+    def set_volume_locked(self, locked):
+        self.config["volume_locked"] = bool(locked)
+        self._repository.save(self.config)
+        self.on_state_changed()
+
+    def set_volume(self, strip_id, percent, from_surface=False):
+        """Sets a strip's level.
+
+        from_surface marks a change as coming from the control surface, which is
+        the one source the lock never blocks - the point of locking is to stop
+        software from moving levels out from under the physical faders.
+        """
+        if self.volume_locked and not from_surface:
+            # Re-notify so a UI that moved its own slider snaps back.
+            self.on_state_changed()
+            return
         percent = max(0, min(100, percent))
         self.config["volume"][strip_id] = percent
         self.on_state_changed()
         self._throttled(f"strip:{strip_id}", lambda: self._apply_volume(strip_id))
 
-    def set_output_volume(self, out_id, percent):
+    def set_output_volume(self, out_id, percent, from_surface=False):
+        if self.volume_locked and not from_surface:
+            self.on_state_changed()
+            return
         percent = max(0, min(100, percent))
         self.config["output_volume"][out_id] = percent
         self.on_state_changed()

@@ -94,10 +94,11 @@ class MidiController:
             return
         percent = round(value / 127 * 100)
         for kind, key in self._bindings.matches_for_cc(controller):
+            # from_surface: the lock exists to keep software out, not the board.
             if kind == "volume_cc":
-                self._mixer.set_volume(key, percent)
+                self._mixer.set_volume(key, percent, from_surface=True)
             else:
-                self._mixer.set_output_volume(key, percent)
+                self._mixer.set_output_volume(key, percent, from_surface=True)
             return
 
     def _consume_learn(self, number, accepts_kind):

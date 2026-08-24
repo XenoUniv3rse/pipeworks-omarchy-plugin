@@ -40,9 +40,15 @@ class StripControls:
         Guarded comparisons matter: assigning to a Gtk control re-emits its
         changed signal, which would loop straight back into the mixer.
         """
+        # A locked fader is shown but inert, so it is obvious the level is
+        # reserved to the control surface rather than mysteriously ignoring you.
+        locked = bool(config.get("volume_locked", False))
         for strip_id, scale in self.volume_scales.items():
             if scale.get_value() != config["volume"][strip_id]:
                 scale.set_value(config["volume"][strip_id])
+            scale.set_sensitive(not locked)
+        for scale in self.output_volume_scales.values():
+            scale.set_sensitive(not locked)
         for strip_id, label in self.volume_labels.items():
             label.set_text(f"{round(config['volume'][strip_id])}%")
         for strip_id, button in self.mute_buttons.items():

@@ -62,6 +62,16 @@ class MainWindow(Gtk.ApplicationWindow):
             check.set_sensitive(False)
         bar.pack_start(check, False, False, 0)
 
+        lock = Gtk.CheckButton(label="MIDI-only volume")
+        lock.set_active(self._mixer.volume_locked)
+        lock.set_tooltip_text(
+            "Reserve levels to the control surface. Faders here and in the bar "
+            "stay visible but inert; mute, solo and routing keep working."
+        )
+        lock.connect("toggled", lambda b: self._mixer.set_volume_locked(b.get_active()))
+        bar.pack_start(lock, False, False, 0)
+        self._lock_check = lock
+
         self._status_label = Gtk.Label(label="")
         self._status_label.set_xalign(0)
         bar.pack_start(self._status_label, True, True, 6)
@@ -139,6 +149,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _sync_controls(self):
         self._controls.sync(self._mixer.config)
+        if self._lock_check.get_active() != self._mixer.volume_locked:
+            self._lock_check.set_active(self._mixer.volume_locked)
 
     def _show_status(self, text):
         self._status_label.set_text(text)

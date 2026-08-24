@@ -58,6 +58,9 @@ DEFAULT_CONFIG = {
         "browser": {"master": True, "speakers": True},
         "chat": {"master": True, "speakers": True},
     },
+    # When true, levels answer only to the control surface: software faders are
+    # shown but inert. Mute, solo and routing stay available either way.
+    "volume_locked": False,
     # Physical output state, independent of any channel.
     "output_volume": {"master": 100, "speakers": 100},
     "output_muted": {"master": False, "speakers": False},

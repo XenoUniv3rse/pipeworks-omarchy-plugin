@@ -86,6 +86,8 @@ class PipeworksApplication(Gtk.Application):
             ("toggle-mute", "s", self._on_toggle_mute),
             ("toggle-output-mute", "s", self._on_toggle_output_mute),
             ("toggle-route", "(ss)", self._on_toggle_route),
+            ("set-volume-lock", "b", self._on_set_volume_lock),
+            ("toggle-volume-lock", None, self._on_toggle_volume_lock),
             ("show-window", None, self._on_show_window),
         )
         for name, signature, handler in specs:
@@ -122,6 +124,13 @@ class PipeworksApplication(Gtk.Application):
         routes = self._mixer().config["routes"]
         if strip_id in routes and out_id in routes[strip_id]:
             self._mixer().toggle_route(strip_id, out_id)
+
+    def _on_set_volume_lock(self, _action, parameter):
+        self._mixer().set_volume_locked(parameter.unpack())
+
+    def _on_toggle_volume_lock(self, _action, _parameter):
+        mixer = self._mixer()
+        mixer.set_volume_locked(not mixer.volume_locked)
 
     def _on_show_window(self, _action, _parameter):
         self.present_window()
