@@ -363,7 +363,7 @@ BarWidget {
             visible: root.available
             Layout.fillWidth: true
             text: root.volumeLocked ? "Volume: MIDI only" : "Volume: software + MIDI"
-            iconText: root.volumeLocked ? "\U000f033e" : "\U000f0fc6"
+            iconText: root.volumeLocked ? "󰌾" : "󰿆"
             fontSize: Style.font.bodySmall
             foreground: root.volumeLocked ? root.urgent : root.dim
             fontFamily: root.fontFamily
