@@ -56,6 +56,16 @@ watchdog carry on, and only the level meters stop.
 The bar icon highlights whenever anything is muted, which is usually the answer
 to "why can I not hear this".
 
+If you keep a strip permanently muted — a second set of speakers you rarely use,
+say — exclude it so the icon stays meaningful:
+
+```sh
+omarchy bar set pipeworks.mixer mutedIndicatorIgnore "Roof"
+```
+
+Accepts a comma-separated list, matched against either the strip's on-screen
+name or its id.
+
 ## What it does
 
 * **Virtual channels** — sinks that applications play into (System, Game,

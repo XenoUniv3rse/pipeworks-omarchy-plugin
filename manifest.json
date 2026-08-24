@@ -8,8 +8,18 @@
   "description": "Voicemeeter-style virtual audio mixer for PipeWire with MIDI control surface support.",
   "homepage": "https://github.com/ebirkhoff/pipeworks-omarchy-plugin",
   "repository": "https://github.com/ebirkhoff/pipeworks-omarchy-plugin",
-  "keywords": ["audio", "mixer", "volume", "pipewire", "midi", "routing"],
-  "kinds": ["service", "bar-widget"],
+  "keywords": [
+    "audio",
+    "mixer",
+    "volume",
+    "pipewire",
+    "midi",
+    "routing"
+  ],
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
   "keepLoaded": true,
   "entryPoints": {
     "service": "Service.qml",
@@ -20,6 +30,18 @@
     "description": "Per-channel faders, mutes and routing for the Pipeworks audio mixer",
     "category": "Audio",
     "allowMultiple": false,
-    "defaultSection": "right"
+    "defaultSection": "right",
+    "defaults": {
+      "mutedIndicatorIgnore": ""
+    },
+    "schema": [
+      {
+        "key": "mutedIndicatorIgnore",
+        "type": "string",
+        "label": "Ignore these strips in the mute indicator",
+        "defaultValue": "",
+        "description": "Comma-separated strip names or ids whose mute state should not light the bar icon. Useful for an output you normally leave muted, which would otherwise keep the icon lit permanently."
+      }
+    ]
   }
 }

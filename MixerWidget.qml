@@ -59,12 +59,43 @@ BarWidget {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
+  // Strips excluded from the bar indicator, by id or by the label shown on
+  // screen. An output that normally lives muted - a second set of speakers you
+  // rarely use - would otherwise keep the icon lit permanently, which just
+  // teaches you to ignore it.
+  readonly property var indicatorIgnored: {
+    var ignored = ({})
+    var tokens = String(root.setting("mutedIndicatorIgnore", "")).split(",")
+    for (var i = 0; i < tokens.length; i++) {
+      var token = tokens[i].trim().toLowerCase()
+      if (token !== "") ignored[token] = true
+    }
+    return ignored
+  }
+
+  function labelFor(stripId) {
+    var groups = [root.inputs, root.channels, root.outputs]
+    for (var g = 0; g < groups.length; g++) {
+      var list = groups[g]
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i].id === stripId) return String(list[i].label || "")
+      }
+    }
+    return ""
+  }
+
+  function countsTowardIndicator(stripId) {
+    if (root.indicatorIgnored[String(stripId).toLowerCase()]) return false
+    var label = root.labelFor(stripId).toLowerCase()
+    return !(label !== "" && root.indicatorIgnored[label])
+  }
+
   // Anything silenced is worth surfacing on the bar itself: a muted channel is
   // the usual answer to "why can I not hear this".
   readonly property bool anyMuted: {
     var key
-    for (key in mutes) if (mutes[key]) return true
-    for (key in outputMutes) if (outputMutes[key]) return true
+    for (key in mutes) if (mutes[key] && root.countsTowardIndicator(key)) return true
+    for (key in outputMutes) if (outputMutes[key] && root.countsTowardIndicator(key)) return true
     return false
   }
   readonly property bool available: loaded && (channels.length > 0 || inputs.length > 0)
