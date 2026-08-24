@@ -51,6 +51,10 @@ watchdog carry on, and only the level meters stop.
 | Panel fader | Set that strip's level |
 | Panel speaker icon | Toggle mute |
 | Panel output buttons | Toggle routing of that channel to that output |
+
+Each strip carries a horizontal level meter under its fader, showing what that
+strip is actually playing. Meters run only while the panel is open, so a closed
+panel costs nothing.
 | "Open mixer" | Open the full window |
 
 The bar icon highlights whenever anything is muted, which is usually the answer

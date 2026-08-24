@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
+import Quickshell.Services.Pipewire
 import qs.Commons
 import qs.Ui
 
@@ -71,6 +72,26 @@ BarWidget {
       if (token !== "") ignored[token] = true
     }
     return ignored
+  }
+
+  // Live PipeWire nodes, used to attach peak monitors for the level meters.
+  readonly property var pwNodes: Pipewire.nodes ? Pipewire.nodes.values : []
+
+  function nodeNamed(name) {
+    if (!name) return null
+    for (var i = 0; i < pwNodes.length; i++) {
+      if (pwNodes[i] && pwNodes[i].name === name) return pwNodes[i]
+    }
+    return null
+  }
+
+  // Maps a linear peak to a 0-1 meter position on a dB scale. A linear scale is
+  // useless here: everyday audio never approaches full scale, so normal content
+  // would barely lift the bar off the floor.
+  function peakToLevel(peak) {
+    if (!peak || peak <= 0) return 0
+    var db = 20 * Math.log(peak) / Math.LN10
+    return Math.max(0, Math.min(1, (db + 50) / 50))
   }
 
   function labelFor(stripId) {
@@ -351,6 +372,42 @@ BarWidget {
     }
   }
 
+  // Horizontal segmented level meter. Same colour scheme and dB floor as the
+  // mixer window's vertical meters, so the two read as one instrument.
+  component LevelBar: Row {
+    id: meter
+    property real level: 0
+
+    readonly property int segments: 22
+    readonly property real amberFrom: 0.64   // ~-18 dB on a -50..0 scale
+    readonly property real redFrom: 0.88     // ~-6 dB
+
+    spacing: 1
+    // Peaks arrive faster than the eye can follow; easing the value keeps the
+    // bar readable instead of strobing.
+    Behavior on level { NumberAnimation { duration: 80 } }
+
+    Repeater {
+      model: meter.segments
+      delegate: Rectangle {
+        required property int index
+        readonly property real fraction: (index + 0.5) / meter.segments
+        readonly property bool lit: meter.level * meter.segments > index
+        readonly property color zone: fraction >= meter.redFrom
+          ? Qt.rgba(0.91, 0.30, 0.24, 1)
+          : (fraction >= meter.amberFrom ? Qt.rgba(0.95, 0.71, 0.19, 1)
+                                         : Qt.rgba(0.35, 0.80, 0.40, 1))
+        width: Math.max(1, (meter.width - (meter.segments - 1) * meter.spacing) / meter.segments)
+        height: meter.height
+        radius: 1
+        // Unlit segments are neutral rather than a dim tint of their zone:
+        // across 22 thin segments the tint read as a rainbow smear under every
+        // idle fader, which pulled the eye without meaning anything.
+        color: lit ? zone : Qt.rgba(1, 1, 1, 0.10)
+      }
+    }
+  }
+
   // One strip: name, level, mute, and (for channels) per-output routing.
   component StripRow: ColumnLayout {
     id: strip
@@ -370,7 +427,45 @@ BarWidget {
       : !!root.mutes[strip.stripId]
     readonly property var routeState: root.routes[strip.stripId] || ({})
 
+    // Where this strip's audible signal lives. For a channel or input that is
+    // the loopback's output side, which carries the post-volume signal; for a
+    // physical output it is the device itself.
+    readonly property string meterNodeName: {
+      if (strip.isOutput) {
+        var port = String(strip.modelData.port_l || "")
+        return port.indexOf(":") > 0 ? port.split(":")[0] : ""
+      }
+      var sink = strip.modelData.target_sink || strip.modelData.sink
+      return sink ? String(sink) + "_out" : ""
+    }
+    readonly property var meterNode: root.nodeNamed(strip.meterNodeName)
+
     spacing: Style.space(2)
+
+    // What the meter should show: what you can actually hear.
+    //
+    // A channel or input is metered on its loopback output, which is already
+    // past the strip's fader. A physical output is metered on the device node,
+    // which is *before* the device volume - so an output turned down to zero
+    // would otherwise show a full signal it is not playing. Attenuate by the
+    // same cubic curve PipeWire uses for volume.
+    readonly property real meterPeak: {
+      if (strip.muted) return 0
+      var raw = peakMonitor.peak || 0
+      if (!strip.isOutput) return raw
+      var fraction = Math.max(0, Math.min(100, strip.level)) / 100
+      return raw * fraction * fraction * fraction
+    }
+
+    // Node properties are only valid while the node is bound.
+    PwObjectTracker { objects: strip.meterNode ? [strip.meterNode] : [] }
+
+    PwNodePeakMonitor {
+      id: peakMonitor
+      node: strip.meterNode
+      // Metering costs real work, so only while the panel is actually on screen.
+      enabled: root.popupOpen && strip.meterNode !== null
+    }
 
     RowLayout {
       Layout.fillWidth: true
@@ -412,6 +507,18 @@ BarWidget {
           if (strip.isOutput) root.toggleOutputMute(strip.stripId)
           else root.toggleMute(strip.stripId)
         }
+      }
+    }
+
+    RowLayout {
+      Layout.fillWidth: true
+      Layout.leftMargin: Style.space(78)
+      Layout.rightMargin: Style.space(32)
+
+      LevelBar {
+        Layout.fillWidth: true
+        height: Style.space(4)
+        level: root.peakToLevel(strip.meterPeak)
       }
     }
 
