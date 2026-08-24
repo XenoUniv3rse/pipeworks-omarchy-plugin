@@ -362,7 +362,7 @@ BarWidget {
           Button {
             visible: root.available
             Layout.fillWidth: true
-            text: root.volumeLocked ? "Volume: MIDI only" : "Volume: software + MIDI"
+            text: root.volumeLocked ? "Volume: MIDI only" : "Volume: Software + MIDI"
             iconText: root.volumeLocked ? "󰌾" : "󰿆"
             fontSize: Style.font.bodySmall
             foreground: root.volumeLocked ? root.urgent : root.dim
