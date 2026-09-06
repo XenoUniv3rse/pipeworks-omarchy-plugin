@@ -66,19 +66,13 @@ Item {
       "import sys\n" +
       "missing = []\n" +
       "try:\n" +
-      "    import gi\n" +
-      "    gi.require_version('Gtk', '3.0')\n" +
-      "    from gi.repository import Gtk\n" +
+      "    from gi.repository import Gio, GLib\n" +
       "except Exception:\n" +
       "    missing.append('python-gobject')\n" +
       "try:\n" +
       "    import rtmidi\n" +
       "except Exception:\n" +
       "    missing.append('python-rtmidi')\n" +
-      "try:\n" +
-      "    import numpy\n" +
-      "except Exception:\n" +
-      "    missing.append('python-numpy')\n" +
       "print(','.join(missing))\n"
     ]
     stdout: StdioCollector {

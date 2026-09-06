@@ -18,12 +18,14 @@
   ],
   "kinds": [
     "service",
-    "bar-widget"
+    "bar-widget",
+    "panel"
   ],
   "keepLoaded": true,
   "entryPoints": {
     "service": "Service.qml",
-    "barWidget": "MixerWidget.qml"
+    "barWidget": "MixerWidget.qml",
+    "panel": "MixerWindow.qml"
   },
   "barWidget": {
     "displayName": "Pipeworks Mixer",

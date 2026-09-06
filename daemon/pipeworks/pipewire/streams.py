@@ -10,6 +10,8 @@ class AppStream:
     index: int
     sink_name: str
     label: str
+    # The bare application name, for places too narrow for the full label.
+    app: str
 
 
 class StreamRouter:
@@ -45,6 +47,7 @@ class StreamRouter:
                     index=entry["index"],
                     sink_name=sink_names.get(entry.get("sink"), ""),
                     label=self._label_for(props),
+                    app=self._app_for(props),
                 )
             )
         return streams
@@ -53,8 +56,12 @@ class StreamRouter:
         self._runner.run("pactl", "move-sink-input", str(stream_index), sink_name)
 
     @staticmethod
-    def _label_for(props):
-        app = props.get("application.name") or props.get("node.name") or "Unknown"
+    def _app_for(props):
+        return props.get("application.name") or props.get("node.name") or "Unknown"
+
+    @classmethod
+    def _label_for(cls, props):
+        app = cls._app_for(props)
         media = props.get("media.name") or ""
         label = f"{app} - {media}" if media and media != app else app
         if len(label) > MAX_LABEL_CHARS:

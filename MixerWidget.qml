@@ -1,21 +1,15 @@
 import QtQuick
 import QtQuick.Layouts
-import Quickshell
-import Quickshell.Io
 import Quickshell.Services.Pipewire
 import qs.Commons
 import qs.Ui
 
-// Bar widget for the Pipeworks virtual audio mixer.
+// Bar widget for the Pipeworks virtual audio mixer: a fader panel under the
+// bar icon, for the everyday reach for a level without opening the window.
 //
-// State is read from Pipeworks' own config file, which the daemon rewrites
-// whenever anything changes, so this widget follows the MIDI board and the
-// mixer window without polling either.
-//
-// Changes are sent back as org.gtk.Actions calls on the daemon rather than by
-// setting PipeWire volumes directly: the daemon owns the authoritative state
-// and re-applies it whenever links drop, so an out-of-band change would be
-// quietly reverted.
+// Reading state and driving the daemon are MixerModel's job, shared with the
+// mixer window. What is left here is the bar icon, the panel's layout, and the
+// mute indicator - the parts a window has no use for.
 BarWidget {
   id: root
   moduleName: "pipeworks.mixer"
@@ -27,9 +21,15 @@ BarWidget {
 
   property bool popupOpen: false
 
-  readonly property string busName: "io.github.pipeworks.Pipeworks"
-  readonly property string busPath: "/io/github/pipeworks/Pipeworks"
-  readonly property string configPath: Quickshell.env("HOME") + "/.config/pipeworks/config.json"
+  // State and actions live in MixerModel, shared with the mixer window: both
+  // front ends follow the same files and drive the daemon through the same
+  // actions, so there is one place for that plumbing rather than two copies
+  // drifting apart.
+  //
+  // watching stays false. It asks the daemon to poll for running applications
+  // and devices, which only the window shows - the bar panel would be paying
+  // for a pactl call every couple of seconds and displaying none of it.
+  MixerModel { id: mixer }
 
   // The plugin's own service, which supervises the daemon. Consulted only to
   // explain an empty panel: without it the widget still works against a
@@ -37,31 +37,42 @@ BarWidget {
   readonly property var service: bar && bar.shell
     ? bar.shell.serviceFor("pipeworks.mixer") : null
 
-  property var config: ({})
-  property bool loaded: false
-
-  // Repeater models. Reassigning these rebuilds every delegate, so they are
-  // only replaced when the set of strips actually changes - not on every
-  // volume tick, which would otherwise tear the whole panel down and rebuild
-  // it several times a second while a fader moves.
-  property var inputs: []
-  property var channels: []
-  property var outputs: []
-  property string structure: ""
-  readonly property var volumes: config.volume || ({})
-  readonly property var mutes: config.muted || ({})
-  readonly property var outputVolumes: config.output_volume || ({})
-  readonly property var outputMutes: config.output_muted || ({})
-  readonly property var routes: config.routes || ({})
-  // Levels reserved to the control surface. Faders stay visible but inert, so
-  // it is obvious why they do not move rather than them seeming broken.
-  readonly property bool volumeLocked: config.volume_locked === true
-
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color barForegroundColor: bar ? bar.barForeground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+
+  // Panel geometry.
+  //
+  // Every strip is pinned to exactly stripWidth so the panel's width can be
+  // arithmetic. Measuring the laid-out content instead reads better but does
+  // not work here: the content sits inside the panel, so its implicit width
+  // feeds back into the panel's own width, and Qt breaks that cycle by keeping
+  // a stale value - which sized the panel for fewer strips than it had and
+  // dropped the last one off the edge.
+  readonly property int stripWidth: Style.space(64)
+  readonly property int stripSpacing: Style.space(6)
+  readonly property int sectionSpacing: Style.space(10)
+  readonly property int faderHeight: Style.space(120)
+  readonly property int minPanelWidth: Style.space(340)
+
+  // How many strips each populated section holds. Empty sections are dropped
+  // so they cost neither a column nor a dividing rule.
+  readonly property var sectionSizes: [
+    mixer.inputs.length, mixer.channels.length, mixer.outputs.length
+  ].filter(function (count) { return count > 0 })
+
+  readonly property int desiredPanelWidth: {
+    if (!mixer.available || root.sectionSizes.length === 0) return root.minPanelWidth
+    var total = 0
+    for (var i = 0; i < root.sectionSizes.length; i++)
+      total += root.sectionSizes[i] * root.stripWidth
+        + (root.sectionSizes[i] - 1) * root.stripSpacing
+    // Every gap between sections carries a rule plus the spacing either side.
+    total += (root.sectionSizes.length - 1) * (root.sectionSpacing * 2 + 1)
+    return Math.max(root.minPanelWidth, total)
+  }
 
   // Strips excluded from the bar indicator, by id or by the label shown on
   // screen. An output that normally lives muted - a second set of speakers you
@@ -77,28 +88,8 @@ BarWidget {
     return ignored
   }
 
-  // Live PipeWire nodes, used to attach peak monitors for the level meters.
-  readonly property var pwNodes: Pipewire.nodes ? Pipewire.nodes.values : []
-
-  function nodeNamed(name) {
-    if (!name) return null
-    for (var i = 0; i < pwNodes.length; i++) {
-      if (pwNodes[i] && pwNodes[i].name === name) return pwNodes[i]
-    }
-    return null
-  }
-
-  // Maps a linear peak to a 0-1 meter position on a dB scale. A linear scale is
-  // useless here: everyday audio never approaches full scale, so normal content
-  // would barely lift the bar off the floor.
-  function peakToLevel(peak) {
-    if (!peak || peak <= 0) return 0
-    var db = 20 * Math.log(peak) / Math.LN10
-    return Math.max(0, Math.min(1, (db + 50) / 50))
-  }
-
   function labelFor(stripId) {
-    var groups = [root.inputs, root.channels, root.outputs]
+    var groups = [mixer.inputs, mixer.channels, mixer.outputs]
     for (var g = 0; g < groups.length; g++) {
       var list = groups[g]
       for (var i = 0; i < list.length; i++) {
@@ -118,127 +109,26 @@ BarWidget {
   // the usual answer to "why can I not hear this".
   readonly property bool anyMuted: {
     var key
-    for (key in mutes) if (mutes[key] && root.countsTowardIndicator(key)) return true
-    for (key in outputMutes) if (outputMutes[key] && root.countsTowardIndicator(key)) return true
+    for (key in mixer.mutes)
+      if (mixer.mutes[key] && root.countsTowardIndicator(key)) return true
+    for (key in mixer.outputMutes)
+      if (mixer.outputMutes[key] && root.countsTowardIndicator(key)) return true
     return false
   }
-  readonly property bool available: loaded && (channels.length > 0 || inputs.length > 0)
 
-  // ---------------------------------------------------------------- state
-
-  FileView {
-    id: configFile
-    path: root.configPath
-    watchChanges: true
-    printErrors: false
-    onLoaded: root.parseConfig(text())
-    // Only report unavailable if nothing has ever loaded; a failure after
-    // that is transient and the last good state stays on screen.
-    onLoadFailed: if (root.structure === "") root.loaded = false
-    onFileChanged: reload()
-  }
-
-  function parseConfig(raw) {
-    var next
-    try {
-      next = JSON.parse(raw)
-    } catch (error) {
-      // Keep showing the last good state; a bad read is transient and
-      // blanking the panel for it is worse than being briefly stale.
-      return
-    }
-
-    root.config = next
-    root.loaded = true
-
-    var signature = root.structureSignature(next)
-    if (signature !== root.structure) {
-      root.structure = signature
-      root.inputs = next.inputs instanceof Array ? next.inputs : []
-      root.channels = next.channels instanceof Array ? next.channels : []
-      root.outputs = next.outputs instanceof Array ? next.outputs : []
-    }
-  }
-
-  // Identifies which strips exist and what they are called. Values are
-  // deliberately excluded: they update through `config` without touching the
-  // models.
-  function structureSignature(candidate) {
-    function describe(list) {
-      if (!(list instanceof Array)) return ""
-      var parts = []
-      for (var i = 0; i < list.length; i++) {
-        var entry = list[i] || ({})
-        parts.push(String(entry.id) + "\u001f" + String(entry.label))
-      }
-      return parts.join(",")
-    }
-    return describe(candidate.inputs) + "|" + describe(candidate.channels)
-      + "|" + describe(candidate.outputs)
-  }
-
-  // --------------------------------------------------------------- actions
-
-  Process { id: action }
-
-
-  function activate(name, parameter) {
-    if (action.running) action.running = false
-    action.command = [
-      "gdbus", "call", "--session",
-      "--dest", root.busName, "--object-path", root.busPath,
-      "--method", "org.gtk.Actions.Activate",
-      name, parameter, "{}"
-    ]
-    action.running = true
-  }
-
-  function setVolume(stripId, percent) {
-    root.activate("set-volume", "[<('" + stripId + "', " + percent.toFixed(1) + ")>]")
-  }
-
-  function setOutputVolume(outId, percent) {
-    root.activate("set-output-volume", "[<('" + outId + "', " + percent.toFixed(1) + ")>]")
-  }
-
-  function toggleMute(stripId) { root.activate("toggle-mute", "[<'" + stripId + "'>]") }
-  function toggleOutputMute(outId) { root.activate("toggle-output-mute", "[<'" + outId + "'>]") }
-  function toggleRoute(stripId, outId) {
-    root.activate("toggle-route", "[<('" + stripId + "', '" + outId + "')>]")
-  }
   readonly property bool opened: popupOpen
   function open() { root.popupOpen = true }
   function close() { root.popupOpen = false }
 
   function openWindow() {
-    root.activate("show-window", "[]")
+    // The window is a panel in this same shell, so summon it directly. Asking
+    // the daemon would only have it shell back out to the shell again. The
+    // action stays as the fallback for a shell too old to know the panel.
+    if (root.bar && root.bar.shell && typeof root.bar.shell.summon === "function")
+      root.bar.shell.summon("pipeworks.mixer", "{}")
+    else
+      mixer.activate("show-window", "[]")
     root.popupOpen = false
-  }
-
-  // Slider drags are coalesced: without this a drag would spawn a gdbus
-  // process per frame.
-  property var pending: ({})
-
-  Timer {
-    id: flushTimer
-    interval: 90
-    repeat: true
-    running: false
-    onTriggered: {
-      for (var key in root.pending) {
-        var entry = root.pending[key]
-        delete root.pending[key]
-        if (entry.isOutput) root.setOutputVolume(entry.id, entry.value)
-        else root.setVolume(entry.id, entry.value)
-        return  // one call per tick keeps a single gdbus process in flight
-      }
-      running = false
-    }
-  }
-
-  function queueVolume(stripId, percent, isOutput) {
-    root.pending[stripId] = { "id": stripId, "value": percent, "isOutput": isOutput }
-    flushTimer.running = true
   }
 
   // ------------------------------------------------------------- bar icon
@@ -249,9 +139,9 @@ BarWidget {
     bar: root.bar
     // md-tune (U+F062E): the mixer-faders glyph.
     text: "󰘮"
-    active: root.available && root.anyMuted
-    dimmed: !root.available
-    tooltipText: root.available
+    active: mixer.available && root.anyMuted
+    dimmed: !mixer.available
+    tooltipText: mixer.available
       ? "Pipeworks mixer" + (root.anyMuted ? "  ·  something is muted" : "")
       : "Pipeworks is not running"
     onPressed: function(mouseButton) {
@@ -269,7 +159,13 @@ BarWidget {
     owner: root
     open: root.popupOpen
     focusTarget: keyCatcher
-    contentWidth: popup.fittedContentWidth(Style.space(340))
+    // The width the strips need is the width *inside* the card, so the card's
+    // own padding and border have to be added on top - fittedContentHeight
+    // does that for height, but the width side leaves it to the caller.
+    contentWidth: popup.fittedContentWidth(
+      root.desiredPanelWidth + popup.padding * 2
+        + Border.left(popup.borderSpec) + Border.right(popup.borderSpec),
+      Style.space(1400))
     contentHeight: popup.fittedContentHeight(column.implicitHeight, Style.space(620))
 
     Item {
@@ -279,20 +175,23 @@ BarWidget {
       Keys.onEscapePressed: root.close()
 
       Flickable {
+        id: flick
         anchors.fill: parent
-        contentWidth: width
+        contentWidth: column.width
         contentHeight: column.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
-        interactive: contentHeight > height
+        interactive: contentHeight > height || contentWidth > width
 
         ColumnLayout {
           id: column
-          width: parent.width
+          // Never narrower than the strips need: on a display too small for
+          // them the panel scrolls sideways rather than crushing every fader.
+          width: Math.max(flick.width, root.desiredPanelWidth)
           spacing: Style.space(6)
 
           Text {
-            visible: !root.available
+            visible: !mixer.available
             Layout.fillWidth: true
             text: {
               if (!root.service) return "Pipeworks is not running."
@@ -309,73 +208,66 @@ BarWidget {
             wrapMode: Text.WordWrap
           }
 
-          PanelSectionHeader {
-            visible: root.available && root.inputs.length > 0
-            Layout.fillWidth: true
-            text: "Inputs"
-            foreground: root.dim
-            fontFamily: root.fontFamily
-          }
+          // Every strip vertical and side by side, sections divided by a rule -
+          // the same shape as the mixer window, so the two read as one
+          // instrument rather than two different programs.
+          RowLayout {
+            visible: mixer.available
+            Layout.alignment: Qt.AlignHCenter
+            spacing: root.sectionSpacing
 
-          Repeater {
-            model: root.available ? root.inputs : []
-            delegate: StripRow { Layout.fillWidth: true }
-          }
+            StripSection {
+              visible: mixer.inputs.length > 0
+              title: "Inputs"
+              model: mixer.available ? mixer.inputs : []
+            }
 
-          PanelSectionHeader {
-            visible: root.available && root.channels.length > 0
-            Layout.fillWidth: true
-            text: "Channels"
-            foreground: root.dim
-            fontFamily: root.fontFamily
-          }
+            SectionRule {
+              visible: mixer.inputs.length > 0
+                && (mixer.channels.length > 0 || mixer.outputs.length > 0)
+            }
 
-          Repeater {
-            model: root.available ? root.channels : []
-            delegate: StripRow {
-              Layout.fillWidth: true
+            StripSection {
+              visible: mixer.channels.length > 0
+              title: "Channels"
+              model: mixer.available ? mixer.channels : []
               showRoutes: true
             }
-          }
 
-          PanelSectionHeader {
-            visible: root.available && root.outputs.length > 0
-            Layout.fillWidth: true
-            text: "Outputs"
-            foreground: root.dim
-            fontFamily: root.fontFamily
-          }
+            SectionRule {
+              visible: mixer.channels.length > 0 && mixer.outputs.length > 0
+            }
 
-          Repeater {
-            model: root.available ? root.outputs : []
-            delegate: StripRow {
-              Layout.fillWidth: true
+            StripSection {
+              visible: mixer.outputs.length > 0
+              title: "Outputs"
+              model: mixer.available ? mixer.outputs : []
               isOutput: true
             }
           }
 
           PanelSeparator {
-            visible: root.available
+            visible: mixer.available
             Layout.fillWidth: true
           }
 
           Button {
-            visible: root.available
+            visible: mixer.available
             Layout.fillWidth: true
-            text: root.volumeLocked ? "Volume: MIDI only" : "Volume: Software + MIDI"
-            iconText: root.volumeLocked ? "󰌾" : "󰿆"
+            text: mixer.volumeLocked ? "Volume: MIDI only" : "Volume: Software + MIDI"
+            iconText: mixer.volumeLocked ? "󰌾" : "󰿆"
             fontSize: Style.font.bodySmall
-            foreground: root.volumeLocked ? root.urgent : root.dim
+            foreground: mixer.volumeLocked ? root.urgent : root.dim
             fontFamily: root.fontFamily
             bordered: true
-            tooltipText: root.volumeLocked
+            tooltipText: mixer.volumeLocked
               ? "Levels answer only to the control surface. Click to allow software changes."
               : "Click to reserve levels to the control surface."
-            onClicked: root.activate("toggle-volume-lock", "[]")
+            onClicked: mixer.activate("toggle-volume-lock", "[]")
           }
 
           Button {
-            visible: root.available
+            visible: mixer.available
             Layout.fillWidth: true
             text: "Open mixer"
             iconText: "󰘮"
@@ -390,44 +282,99 @@ BarWidget {
     }
   }
 
-  // Horizontal segmented level meter. Same colour scheme and dB floor as the
-  // mixer window's vertical meters, so the two read as one instrument.
-  component LevelBar: Row {
+  // Vertical segmented level meter. Same colour scheme and dB floor as the
+  // mixer window's meters, so the two read as one instrument.
+  //
+  // The segments live in a Column inside a plain Item rather than in the Item
+  // itself: a Column sizes itself from its children, and children measured
+  // against their parent's height would make that circular.
+  component LevelColumn: Item {
     id: meter
     property real level: 0
 
     readonly property int segments: 22
     readonly property real amberFrom: 0.64   // ~-18 dB on a -50..0 scale
     readonly property real redFrom: 0.88     // ~-6 dB
+    readonly property real gap: 1
 
-    spacing: 1
     // Peaks arrive faster than the eye can follow; easing the value keeps the
-    // bar readable instead of strobing.
+    // meter readable instead of strobing.
     Behavior on level { NumberAnimation { duration: 80 } }
 
-    Repeater {
-      model: meter.segments
-      delegate: Rectangle {
-        required property int index
-        readonly property real fraction: (index + 0.5) / meter.segments
-        readonly property bool lit: meter.level * meter.segments > index
-        readonly property color zone: fraction >= meter.redFrom
-          ? Qt.rgba(0.91, 0.30, 0.24, 1)
-          : (fraction >= meter.amberFrom ? Qt.rgba(0.95, 0.71, 0.19, 1)
-                                         : Qt.rgba(0.35, 0.80, 0.40, 1))
-        width: Math.max(1, (meter.width - (meter.segments - 1) * meter.spacing) / meter.segments)
-        height: meter.height
-        radius: 1
-        // Unlit segments are neutral rather than a dim tint of their zone:
-        // across 22 thin segments the tint read as a rainbow smear under every
-        // idle fader, which pulled the eye without meaning anything.
-        color: lit ? zone : Qt.rgba(1, 1, 1, 0.10)
+    Column {
+      anchors.fill: parent
+      spacing: meter.gap
+
+      Repeater {
+        model: meter.segments
+        delegate: Rectangle {
+          required property int index
+          // A Column lays out top-down while a meter fills from the bottom, so
+          // the first delegate is the loudest segment, not the quietest.
+          readonly property real fraction: (meter.segments - index - 0.5) / meter.segments
+          readonly property bool lit: meter.level * meter.segments > meter.segments - index - 1
+          readonly property color zone: fraction >= meter.redFrom
+            ? Qt.rgba(0.91, 0.30, 0.24, 1)
+            : (fraction >= meter.amberFrom ? Qt.rgba(0.95, 0.71, 0.19, 1)
+                                           : Qt.rgba(0.35, 0.80, 0.40, 1))
+          width: meter.width
+          height: Math.max(1, (meter.height - (meter.segments - 1) * meter.gap) / meter.segments)
+          radius: 1
+          // Unlit segments are neutral rather than a dim tint of their zone:
+          // across 22 thin segments the tint read as a rainbow smear under every
+          // idle fader, which pulled the eye without meaning anything.
+          color: lit ? zone : Qt.rgba(1, 1, 1, 0.10)
+        }
       }
     }
   }
 
-  // One strip: name, level, mute, and (for channels) per-output routing.
-  component StripRow: ColumnLayout {
+  // One titled group of strips - Inputs, Channels or Outputs.
+  component StripSection: ColumnLayout {
+    id: section
+
+    property string title: ""
+    property alias model: strips.model
+    property bool isOutput: false
+    property bool showRoutes: false
+
+    Layout.alignment: Qt.AlignTop
+    spacing: Style.space(4)
+
+    PanelSectionHeader {
+      Layout.fillWidth: true
+      text: section.title
+      foreground: root.dim
+      fontFamily: root.fontFamily
+    }
+
+    RowLayout {
+      Layout.fillWidth: true
+      spacing: root.stripSpacing
+
+      Repeater {
+        id: strips
+        delegate: StripColumn {
+          isOutput: section.isOutput
+          showRoutes: section.showRoutes
+        }
+      }
+    }
+  }
+
+  // The rule between two sections. PanelSeparator is horizontal by
+  // construction, and the top margin drops it below the section headings so it
+  // divides the strips rather than the titles.
+  component SectionRule: Rectangle {
+    Layout.preferredWidth: 1
+    Layout.fillHeight: true
+    Layout.topMargin: Style.font.subtitle + Style.space(6)
+    color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+  }
+
+  // One strip: name, meter and fader, mute, and (for channels) per-output
+  // routing. Vertical, so strips sit side by side the way a mixer's do.
+  component StripColumn: ColumnLayout {
     id: strip
 
     required property var modelData
@@ -437,13 +384,13 @@ BarWidget {
     readonly property string stripId: strip.modelData.id
     readonly property string stripLabel: strip.modelData.label || strip.stripId
     readonly property real level: {
-      var store = strip.isOutput ? root.outputVolumes : root.volumes
+      var store = strip.isOutput ? mixer.outputVolumes : mixer.volumes
       return store[strip.stripId] !== undefined ? store[strip.stripId] : 0
     }
     readonly property bool muted: strip.isOutput
-      ? !!root.outputMutes[strip.stripId]
-      : !!root.mutes[strip.stripId]
-    readonly property var routeState: root.routes[strip.stripId] || ({})
+      ? !!mixer.outputMutes[strip.stripId]
+      : !!mixer.mutes[strip.stripId]
+    readonly property var routeState: mixer.routes[strip.stripId] || ({})
 
     // Where this strip's audible signal lives. For a channel or input that is
     // the loopback's output side, which carries the post-volume signal; for a
@@ -456,9 +403,16 @@ BarWidget {
       var sink = strip.modelData.target_sink || strip.modelData.sink
       return sink ? String(sink) + "_out" : ""
     }
-    readonly property var meterNode: root.nodeNamed(strip.meterNodeName)
+    readonly property var meterNode: mixer.nodeNamed(strip.meterNodeName)
 
-    spacing: Style.space(2)
+    spacing: Style.space(3)
+    // Pinned at all three bounds: a routing button with a long label would
+    // otherwise raise the strip's minimum width and quietly outgrow the panel
+    // width computed above.
+    Layout.minimumWidth: root.stripWidth
+    Layout.preferredWidth: root.stripWidth
+    Layout.maximumWidth: root.stripWidth
+    Layout.alignment: Qt.AlignTop
 
     // What the meter should show: what you can actually hear.
     //
@@ -485,87 +439,93 @@ BarWidget {
       enabled: root.popupOpen && strip.meterNode !== null
     }
 
-    RowLayout {
+    Text {
       Layout.fillWidth: true
-      spacing: Style.space(6)
-
-      Text {
-        text: strip.stripLabel
-        color: strip.muted ? root.dim : root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.subtitle
-        elide: Text.ElideRight
-        Layout.preferredWidth: Style.space(72)
-      }
-
-      PanelSlider {
-        Layout.fillWidth: true
-        bar: root.bar
-        enabled: !root.volumeLocked
-        opacity: root.volumeLocked ? 0.45 : 1.0
-        minimum: 0
-        maximum: 100
-        step: 2
-        integer: true
-        // While dragging the slider is the truth; otherwise follow the daemon,
-        // so the MIDI board and the mixer window move it too.
-        value: dragging ? liveValue : strip.level
-        fillColor: strip.muted ? root.dim : root.foreground
-        onMoved: function(value) { root.queueVolume(strip.stripId, value, strip.isOutput) }
-        onReleased: function(value) { root.queueVolume(strip.stripId, value, strip.isOutput) }
-      }
-
-      Button {
-        // md-volume_mute (U+F075F) / md-volume_high (U+F057E).
-        iconText: strip.muted ? "󰝟" : "󰕾"
-        iconSize: Style.font.body
-        horizontalPadding: Style.space(5)
-        foreground: strip.muted ? root.urgent : root.foreground
-        fontFamily: root.fontFamily
-        tooltipText: strip.muted ? "Unmute" : "Mute"
-        onClicked: {
-          if (strip.isOutput) root.toggleOutputMute(strip.stripId)
-          else root.toggleMute(strip.stripId)
-        }
-      }
+      text: strip.stripLabel
+      color: strip.muted ? root.dim : root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      horizontalAlignment: Text.AlignHCenter
+      elide: Text.ElideRight
     }
 
     RowLayout {
-      Layout.fillWidth: true
-      Layout.leftMargin: Style.space(78)
-      Layout.rightMargin: Style.space(32)
-
-      LevelBar {
-        Layout.fillWidth: true
-        height: Style.space(4)
-        level: root.peakToLevel(strip.meterPeak)
-      }
-    }
-
-    RowLayout {
-      visible: strip.showRoutes && root.outputs.length > 0
-      Layout.fillWidth: true
-      Layout.leftMargin: Style.space(78)
+      Layout.alignment: Qt.AlignHCenter
       spacing: Style.space(4)
 
-      Repeater {
-        model: strip.showRoutes ? root.outputs : []
-        delegate: Button {
-          required property var modelData
-          text: modelData.label || modelData.id
-          fontSize: Style.font.caption
-          horizontalPadding: Style.space(6)
-          verticalPadding: Style.space(2)
-          bordered: true
-          active: !!strip.routeState[modelData.id]
-          foreground: strip.routeState[modelData.id] ? root.foreground : root.dim
-          fontFamily: root.fontFamily
-          tooltipText: "Route " + strip.stripLabel + " to " + text
-          onClicked: root.toggleRoute(strip.stripId, modelData.id)
-        }
+      LevelColumn {
+        Layout.preferredWidth: Style.space(5)
+        Layout.preferredHeight: root.faderHeight
+        level: mixer.peakToLevel(strip.meterPeak)
       }
 
-      Item { Layout.fillWidth: true }
+      // PanelSlider is horizontal by construction; a quarter turn gives a
+      // fader without reimplementing the shell's slider, and keeps its
+      // styling, wheel handling and knob animation. Mouse positions arrive in
+      // the slider's own unrotated frame, so its drag maths still measures
+      // along the track.
+      Item {
+        Layout.preferredWidth: fader.implicitHeight
+        Layout.preferredHeight: root.faderHeight
+
+        PanelSlider {
+          id: fader
+          width: parent.height
+          height: parent.width
+          anchors.centerIn: parent
+          rotation: -90
+          bar: root.bar
+          enabled: !mixer.volumeLocked
+          opacity: mixer.volumeLocked ? 0.45 : 1.0
+          minimum: 0
+          maximum: 100
+          step: 2
+          integer: true
+          // While dragging the slider is the truth; otherwise follow the daemon,
+          // so the MIDI board and the mixer window move it too.
+          value: dragging ? liveValue : strip.level
+          fillColor: strip.muted ? root.dim : root.foreground
+          onMoved: function(value) { mixer.queueVolume(strip.stripId, value, strip.isOutput) }
+          onReleased: function(value) { mixer.queueVolume(strip.stripId, value, strip.isOutput) }
+        }
+      }
+    }
+
+    Button {
+      Layout.alignment: Qt.AlignHCenter
+      // md-volume_mute (U+F075F) / md-volume_high (U+F057E).
+      iconText: strip.muted ? "󰝟" : "󰕾"
+      iconSize: Style.font.body
+      horizontalPadding: Style.space(5)
+      foreground: strip.muted ? root.urgent : root.foreground
+      fontFamily: root.fontFamily
+      tooltipText: strip.muted ? "Unmute" : "Mute"
+      onClicked: {
+        if (strip.isOutput) mixer.toggleOutputMute(strip.stripId)
+        else mixer.toggleMute(strip.stripId)
+      }
+    }
+
+    Repeater {
+      model: strip.showRoutes ? mixer.outputs : []
+      delegate: Button {
+        required property var modelData
+        Layout.fillWidth: true
+        // Free to shrink to the strip, and clipped rather than overflowing
+        // into the neighbouring channel when the label is too long for it.
+        Layout.minimumWidth: 0
+        clip: true
+        text: modelData.label || modelData.id
+        fontSize: Style.font.caption
+        horizontalPadding: Style.space(4)
+        verticalPadding: Style.space(2)
+        bordered: true
+        active: !!strip.routeState[modelData.id]
+        foreground: strip.routeState[modelData.id] ? root.foreground : root.dim
+        fontFamily: root.fontFamily
+        tooltipText: "Route " + strip.stripLabel + " to " + text
+        onClicked: mixer.toggleRoute(strip.stripId, modelData.id)
+      }
     }
   }
 }

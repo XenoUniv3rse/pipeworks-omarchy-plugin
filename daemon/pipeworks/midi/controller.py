@@ -45,6 +45,15 @@ class MidiController:
     # ------------------------------------------------------------------
     # Learn
 
+    # A board is open, so Learn can actually complete. Published so a front end
+    # can say "no control surface" rather than leaving Learn waiting forever.
+    connected = True
+
+    @property
+    def learning(self):
+        """(kind, key) awaiting a control, or None."""
+        return self._learn_target
+
     def start_learn(self, kind, key):
         self._learn_target = (kind, key)
 
@@ -133,6 +142,9 @@ class NullMidiController:
     Substitutable for MidiController so the UI never has to test for its
     absence: Learn simply never completes, and LED updates go nowhere.
     """
+
+    connected = False
+    learning = None
 
     def __init__(self):
         self.on_learned = lambda kind, key, number: None

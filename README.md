@@ -18,12 +18,15 @@ separate application to install and no systemd unit to enable.
 
 ### System packages
 
-The daemon is Python and needs three libraries that cannot sensibly come from
+The daemon is Python and needs two libraries that cannot sensibly come from
 PyPI. Install them once:
 
 ```sh
-sudo pacman -S python-gobject python-rtmidi python-numpy
+sudo pacman -S python-gobject python-rtmidi
 ```
+
+It draws nothing itself, so it needs no GUI toolkit — `python-gobject` is here
+for GLib and its session-bus plumbing, not for GTK.
 
 The bar widget checks for them on startup and tells you which are missing, so
 you can install the plugin first and sort this out after.
@@ -47,14 +50,22 @@ watchdog carry on, and only the level meters stop.
 | Action | Effect |
 |---|---|
 | Left click the bar icon | Open/close the fader panel |
-| Middle click the bar icon | Open the full mixer window |
+| Middle click the bar icon | Open the mixer window |
 | Panel fader | Set that strip's level |
 | Panel speaker icon | Toggle mute |
 | Panel output buttons | Toggle routing of that channel to that output |
 
-Each strip carries a horizontal level meter under its fader, showing what that
-strip is actually playing. Meters run only while the panel is open, so a closed
-panel costs nothing.
+The panel is laid out as a mixer: every strip is vertical and they sit side by
+side, Inputs then Channels then Outputs, divided by a rule. Each carries a
+vertical level meter beside its fader, showing what that strip is actually
+playing. Meters run only while the panel is open, so a closed panel costs
+nothing.
+
+In the mixer window every channel also carries an **Apps** block listing what is
+currently playing into it, one chip per application in that channel's colour.
+Drag a chip onto another channel to move that application there. New
+applications appear in whichever channel is your default sink, so routing one is
+a drag rather than a trip through pavucontrol.
 | "Open mixer" | Open the full window |
 | "Volume: …" button | Toggle MIDI-only volume |
 
@@ -100,8 +111,9 @@ name or its id.
   devices, each with its own fader, mute and solo.
 * **MIDI control** — Learn any fader or button on a control surface, with LED
   feedback on boards that support it.
-* **Application routing** — assign running applications to channels; the choice
-  is remembered next time they start.
+* **Application routing** — every channel shows the applications playing into
+  it as colour-coded chips; drag a chip onto another channel to move it there,
+  and the choice is remembered next time that application starts.
 
 ## Layout
 
@@ -109,13 +121,28 @@ name or its id.
 manifest.json      plugin manifest (id: pipeworks.mixer)
 Service.qml        supervises the daemon
 MixerWidget.qml    the bar widget and its fader panel
-daemon/            the mixer itself
+MixerWindow.qml    the mixer window
+MixerModel.qml     state and actions shared by the widget and the window
+MixerStrip.qml     one channel, input or output as a card
+StripGroup.qml     a titled run of strips
+Fader.qml          vertical fader
+LevelMeter.qml     vertical segmented meter
+AppChip.qml        a running application, draggable between channels
+StripSettings.qml  rename, device, MIDI Learn, remove
+AddStrip.qml       add a channel, input or output
+daemon/            the audio brain — no window, no toolkit
   run.py           launcher
-  pipeworks/       audio domain, PipeWire adapters, MIDI, GTK window
+  pipeworks/       audio domain, PipeWire adapters, MIDI, published state
 ```
 
-The daemon publishes `org.gtk.Actions` on the session bus, which is how the bar
-widget drives it — and how anything else could:
+The split is the thing worth knowing: the daemon owns the audio and nothing
+else, and every front end is QML in the Omarchy shell. That is why the window
+matches the rest of your desktop — it draws with the shell's own colour and
+spacing tokens, so it follows whatever theme is active instead of carrying a
+palette of its own.
+
+Because the front ends are out of process, everything they do crosses the
+session bus as an `org.gtk.Actions` call — and so can anything else:
 
 ```sh
 gdbus call --session --dest io.github.pipeworks.Pipeworks \
@@ -123,8 +150,20 @@ gdbus call --session --dest io.github.pipeworks.Pipeworks \
   --method org.gtk.Actions.Activate "toggle-mute" "[<'music'>]" "{}"
 ```
 
-Actions: `set-volume`, `set-output-volume`, `toggle-mute`,
-`toggle-output-mute`, `toggle-route`, `show-window`.
+Levels and switches: `set-volume`, `set-output-volume`, `toggle-mute`,
+`toggle-output-mute`, `toggle-solo`, `toggle-output-solo`, `toggle-route`,
+`set-volume-lock`, `toggle-volume-lock`.
+Application routing: `move-stream`.
+Structural: `add-channel`, `add-input`, `add-output`, `remove-strip`,
+`rename-strip`, `retarget-input`, `retarget-output`.
+Control surface: `midi-learn`, `midi-learn-cancel`.
+Housekeeping: `set-autostart`, `set-state-watch`, `show-window`.
+
+What a front end needs to *read* rather than command does not fit an action, so
+the daemon publishes it as `~/.config/pipeworks/state.json`: running
+applications, available devices, MIDI Learn progress, autostart status. It is
+only refreshed while a window says it is watching (`set-state-watch`), so an
+idle daemon polls nothing.
 
 ## Configuration
 
