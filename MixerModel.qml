@@ -185,19 +185,32 @@ QtObject {
 
   // -------------------------------------------------------------- actions
 
-  property var _action: Process { }
+  // Calls run one at a time, in order, through a single process.
+  //
+  // An earlier version killed whatever was in flight to start the next call.
+  // That silently threw commands away: removing a strip sent remove-strip and
+  // then, one line later, the dialog's own midi-learn-cancel, which shot the
+  // removal dead before gdbus had finished. Anything issued in quick
+  // succession was at risk, not just that pair.
+  property var _queue: []
+
+  property var _action: Process {
+    onRunningChanged: if (!running) root._drain()
+  }
 
   function activate(name, parameter) {
-    // One call in flight at a time. Structural actions block the daemon for a
-    // second or two while PipeWire restarts, and queueing a pile of gdbus
-    // processes behind them helps nobody.
-    if (root._action.running) root._action.running = false
-    root._action.command = [
+    root._queue.push([
       "gdbus", "call", "--session",
       "--dest", root.busName, "--object-path", root.busPath,
       "--method", "org.gtk.Actions.Activate",
       name, parameter, "{}"
-    ]
+    ])
+    root._drain()
+  }
+
+  function _drain() {
+    if (root._action.running || root._queue.length === 0) return
+    root._action.command = root._queue.shift()
     root._action.running = true
   }
 
@@ -293,12 +306,17 @@ QtObject {
     repeat: true
     running: false
     onTriggered: {
+      // Wait rather than enqueue while a call is still going. `pending` holds
+      // only the newest value per strip, so a skipped tick loses nothing - and
+      // a drag over a slow structural call would otherwise queue up a long
+      // trail of stale levels to replay afterwards.
+      if (root._action.running) return
       for (var key in root.pending) {
         var entry = root.pending[key]
         delete root.pending[key]
         if (entry.isOutput) root.setOutputVolume(entry.id, entry.value)
         else root.setVolume(entry.id, entry.value)
-        return  // one call per tick keeps a single gdbus process in flight
+        return
       }
       running = false
     }

@@ -74,7 +74,9 @@ Item {
   }
 
   function close() {
-    root.model.midiLearnCancel()
+    // Only when one is actually pending: closing the dialog otherwise sends a
+    // cancel for nothing, on every close.
+    if (String(root.model.learn.kind) !== "") root.model.midiLearnCancel()
     root.entity = null
     confirmingRemoval = false
   }
