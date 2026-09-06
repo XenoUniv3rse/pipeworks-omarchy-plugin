@@ -107,6 +107,67 @@ QtObject {
     return Math.max(0, Math.min(1, (db + 50) / 50))
   }
 
+  // Strips looked up live from config rather than from the cached models.
+  //
+  // The models are only reassigned when the *structure* changes - which strips
+  // exist and what they are called - so anything holding a strip object from
+  // them goes stale the moment a value inside it changes. A dialog open on a
+  // strip needs the current contents, so it looks the strip up by id instead.
+  function entityFor(kind, stripId) {
+    var key = kind === "channel" ? "channels" : (kind === "input" ? "inputs" : "outputs")
+    var list = root.config[key] instanceof Array ? root.config[key] : []
+    for (var i = 0; i < list.length; i++)
+      if (String(list[i].id) === String(stripId)) return list[i]
+    return null
+  }
+
+  // The microphones feeding one input.
+  function sourcesFor(inputId) {
+    var entity = root.entityFor("input", inputId)
+    return entity && entity.sources instanceof Array ? entity.sources : []
+  }
+
+  // Just the device names, for use as a Repeater model. Levels deliberately
+  // excluded: they change on every drag, and a model that changed with them
+  // would rebuild the sliders out from under the finger moving one.
+  function sourceNamesFor(inputId) {
+    var names = []
+    var sources = root.sourcesFor(inputId)
+    for (var i = 0; i < sources.length; i++) names.push(String(sources[i].name))
+    return names
+  }
+
+  function sourceVolume(inputId, name) {
+    var sources = root.sourcesFor(inputId)
+    for (var i = 0; i < sources.length; i++)
+      if (String(sources[i].name) === String(name))
+        return sources[i].volume === undefined ? 100 : Number(sources[i].volume)
+    return 100
+  }
+
+  // A capture device's human name. Falls back to the node name, which is what
+  // a microphone unplugged since it was added leaves behind.
+  function deviceDescription(name) {
+    for (var i = 0; i < root.inputDevices.length; i++)
+      if (String(root.inputDevices[i].name) === String(name))
+        return String(root.inputDevices[i].description)
+    return String(name)
+  }
+
+  // Capture devices not already feeding this input, for the add picker.
+  function unusedInputDevices(inputId) {
+    var used = ({})
+    var sources = root.sourcesFor(inputId)
+    for (var i = 0; i < sources.length; i++) used[String(sources[i].name)] = true
+    var out = []
+    for (var d = 0; d < root.inputDevices.length; d++) {
+      var device = root.inputDevices[d]
+      if (!used[String(device.name)])
+        out.push({ value: String(device.name), label: String(device.description) })
+    }
+    return out
+  }
+
   // Streams currently playing into one channel's sink.
   function streamsFor(sinkName) {
     var out = []
@@ -273,6 +334,22 @@ QtObject {
     root.activate("retarget-output", "[<(" + root.quoted(id) + ", " + root.quoted(sink) + ")>]")
   }
 
+  function addInputSource(inputId, source) {
+    root.activate("add-input-source",
+      "[<(" + root.quoted(inputId) + ", " + root.quoted(source) + ")>]")
+  }
+
+  function removeInputSource(inputId, source) {
+    root.activate("remove-input-source",
+      "[<(" + root.quoted(inputId) + ", " + root.quoted(source) + ")>]")
+  }
+
+  function setInputSourceVolume(inputId, source, percent) {
+    root.activate("set-input-source-volume",
+      "[<(" + root.quoted(inputId) + ", " + root.quoted(source) + ", "
+      + percent.toFixed(1) + ")>]")
+  }
+
   function midiLearn(kind, key) {
     root.activate("midi-learn", "[<(" + root.quoted(kind) + ", " + root.quoted(key) + ")>]")
   }
@@ -307,14 +384,16 @@ QtObject {
     running: false
     onTriggered: {
       // Wait rather than enqueue while a call is still going. `pending` holds
-      // only the newest value per strip, so a skipped tick loses nothing - and
+      // only the newest value per knob, so a skipped tick loses nothing - and
       // a drag over a slow structural call would otherwise queue up a long
       // trail of stale levels to replay afterwards.
       if (root._action.running) return
       for (var key in root.pending) {
         var entry = root.pending[key]
         delete root.pending[key]
-        if (entry.isOutput) root.setOutputVolume(entry.id, entry.value)
+        if (entry.kind === "source")
+          root.setInputSourceVolume(entry.id, entry.source, entry.value)
+        else if (entry.kind === "output") root.setOutputVolume(entry.id, entry.value)
         else root.setVolume(entry.id, entry.value)
         return
       }
@@ -323,7 +402,17 @@ QtObject {
   }
 
   function queueVolume(stripId, percent, isOutput) {
-    root.pending[stripId] = { id: stripId, value: percent, isOutput: !!isOutput }
+    // Keyed by kind as well as id: a strip and a physical output can share an
+    // id, and a microphone level is a third thing again.
+    var kind = isOutput ? "output" : "strip"
+    root.pending[kind + ":" + stripId] = { kind: kind, id: stripId, value: percent }
+    root._flushTimer.running = true
+  }
+
+  function queueSourceVolume(inputId, source, percent) {
+    root.pending["source:" + inputId + "/" + source] = {
+      kind: "source", id: inputId, source: source, value: percent
+    }
     root._flushTimer.running = true
   }
 }

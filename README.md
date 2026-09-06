@@ -104,9 +104,11 @@ name or its id.
 * **Virtual channels** — sinks that applications play into (System, Game,
   Music, Browser, Chat, or whatever you name them), each with its own fader,
   mute, solo and per-output routing.
-* **Inputs** — a hardware microphone is republished as a virtual capture device,
-  so Discord and OBS see a mic with this mixer's volume and mute already
-  applied.
+* **Inputs** — one or more hardware microphones republished as a single virtual
+  capture device, so Discord and OBS see one mic with this mixer's volume and
+  mute already applied. An input can carry several: add them in its settings
+  and they are summed, each with its own capture level, which is how a headset
+  mic and a desk mic reach a call as one device.
 * **Physical outputs** — send any channel to any combination of real output
   devices, each with its own fader, mute and solo.
 * **MIDI control** — Learn any fader or button on a control surface, with LED
@@ -156,6 +158,10 @@ Levels and switches: `set-volume`, `set-output-volume`, `toggle-mute`,
 Application routing: `move-stream`.
 Structural: `add-channel`, `add-input`, `add-output`, `remove-strip`,
 `rename-strip`, `retarget-input`, `retarget-output`.
+An input's microphones: `add-input-source`, `remove-input-source`,
+`set-input-source-volume`. These need no reprovisioning — the sources all feed
+one virtual sink that already exists, so adding one is only extra links and
+does not interrupt audio the way adding a whole input does.
 Control surface: `midi-learn`, `midi-learn-cancel`.
 Housekeeping: `set-autostart`, `set-state-watch`, `show-window`.
 
@@ -168,6 +174,13 @@ idle daemon polls nothing.
 ## Configuration
 
 `~/.config/pipeworks/config.json` holds channels, routing and MIDI bindings.
+
+An input lists its microphones under `sources`, each with its own `volume`. That
+level is the capture device's own, so it applies wherever the microphone is
+used, not only here — PipeWire has no per-link gain to set instead, and giving
+each source its own loopback would mean restarting PipeWire every time one was
+added. A config written before an input could hold more than one microphone is
+migrated on load.
 
 Virtual devices are declared in
 `~/.config/pipewire/pipewire.conf.d/10-pipeworks.conf`, regenerated when

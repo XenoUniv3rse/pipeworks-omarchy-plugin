@@ -24,12 +24,20 @@ DEFAULT_CONFIG = {
     # Hardware capture devices. Each is fed into its own virtual sink whose
     # loopback output is published as an Audio/Source, so apps (Discord, OBS)
     # can select it as a microphone with this mixer's volume/mute applied.
+    # An input can carry more than one microphone. Every source in the list is
+    # linked into the same virtual sink, which sums them, so a headset mic and a
+    # desk mic reach Discord as one device. Each carries its own capture level.
     "inputs": [
         {
             "id": "mic",
             "label": "Mic",
-            "source": "alsa_input.usb-MV-SILICON_fifine_Microphone_20190808-00.analog-stereo",
             "target_sink": "virtual_mic",
+            "sources": [
+                {
+                    "name": "alsa_input.usb-MV-SILICON_fifine_Microphone_20190808-00.analog-stereo",
+                    "volume": 100,
+                }
+            ],
         }
     ],
     # Physical output devices, addressed by their playback ports.
@@ -137,6 +145,18 @@ class ConfigRepository:
         # Inputs were once a single hardcoded "mic" entry rather than a list.
         if "mic" in config and "inputs" not in config:
             config["inputs"] = [config.pop("mic")]
+
+        # An input carried exactly one capture device before it could carry
+        # several. Fold that device into the list, keeping any resolved port
+        # names with it so the graph does not have to be rediscovered.
+        for inp in config.get("inputs", []):
+            if "sources" in inp:
+                continue
+            source = {"name": inp.pop("source", ""), "volume": 100}
+            for key in ("capture_l", "capture_r"):
+                if inp.get(key):
+                    source[key] = inp.pop(key)
+            inp["sources"] = [source] if source["name"] else []
 
         for key, value in DEFAULT_CONFIG.items():
             config.setdefault(key, copy.deepcopy(value))

@@ -110,6 +110,10 @@ class PipeworksApplication(Gio.Application):
             ("rename-strip", "(sss)", self._on_rename_strip),
             ("retarget-input", "(ss)", self._on_retarget_input),
             ("retarget-output", "(ss)", self._on_retarget_output),
+            # An input's microphones
+            ("add-input-source", "(ss)", self._on_add_input_source),
+            ("remove-input-source", "(ss)", self._on_remove_input_source),
+            ("set-input-source-volume", "(ssd)", self._on_set_input_source_volume),
             # Control surface
             ("midi-learn", "(ss)", self._on_midi_learn),
             ("midi-learn-cancel", None, self._on_midi_learn_cancel),
@@ -258,6 +262,29 @@ class PipeworksApplication(Gio.Application):
         if sink_name and self._entity("output", out_id):
             self._mixer().retarget_output(out_id, sink_name)
             self._republish()
+
+    # ------------------------------------------------------------------
+    # An input's microphones
+    #
+    # Unlike adding an input, these cost no reprovisioning: the sources all feed
+    # one virtual sink that already exists, so they are only links.
+
+    def _on_add_input_source(self, _action, parameter):
+        input_id, source_name = parameter.unpack()
+        if source_name and self._entity("input", input_id):
+            self._mixer().add_input_source(input_id, source_name)
+            self._republish()
+
+    def _on_remove_input_source(self, _action, parameter):
+        input_id, source_name = parameter.unpack()
+        if source_name and self._entity("input", input_id):
+            self._mixer().remove_input_source(input_id, source_name)
+            self._republish()
+
+    def _on_set_input_source_volume(self, _action, parameter):
+        input_id, source_name, percent = parameter.unpack()
+        if source_name and self._entity("input", input_id):
+            self._mixer().set_input_source_volume(input_id, source_name, percent)
 
     # ------------------------------------------------------------------
     # Control surface

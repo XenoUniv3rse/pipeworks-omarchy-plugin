@@ -25,6 +25,20 @@ class PipeWireBackend:
             daemon=True,
         ).start()
 
+    def set_source_volume(self, source_name, percent):
+        """Capture level of a physical microphone.
+
+        This is the device's own volume, so it applies wherever that
+        microphone is used - not only to this mixer. There is no per-link gain
+        in PipeWire to set instead, and giving each source its own loopback
+        would mean restarting PipeWire every time one is added.
+        """
+        threading.Thread(
+            target=self._runner.run,
+            args=("pactl", "set-source-volume", source_name, f"{percent}%"),
+            daemon=True,
+        ).start()
+
     def set_sink_mute(self, sink_name, muted):
         self._runner.run("pactl", "set-sink-mute", sink_name, "1" if muted else "0")
 

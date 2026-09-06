@@ -15,17 +15,21 @@ Item {
 
   required property var model
   property string kind: ""
-  property var entity: null
+  // The strip is held by id, not as the object the caller passed in: that
+  // object comes from a model only rebuilt when strips are added, removed or
+  // renamed, so it would not show a microphone added while this is open.
+  property string stripId: ""
 
-  readonly property bool open: root.entity !== null
-  readonly property string stripId: root.entity ? String(root.entity.id) : ""
+  readonly property bool open: root.stripId !== ""
+  readonly property var entity: root.open
+    ? root.model.entityFor(root.kind, root.stripId) : null
   readonly property string stripLabel: root.entity
-    ? String(root.entity.label || root.entity.id) : ""
+    ? String(root.entity.label || root.stripId) : root.stripId
 
   // What a Learn row binds, per kind of strip. A route has one row per output,
   // keyed "channel:output", which is why these are built rather than listed.
   readonly property var learnRows: {
-    if (!root.entity) return []
+    if (!root.open) return []
     var rows = []
     if (root.kind === "output") {
       rows.push({ caption: "Volume", kind: "output_volume_cc", key: root.stripId })
@@ -49,26 +53,29 @@ Item {
     return rows
   }
 
+  // Outputs only: an input picks its microphones from the list below instead,
+  // because it can have more than one.
   readonly property var deviceOptions: {
-    var source = root.kind === "output" ? root.model.outputDevices : root.model.inputDevices
+    var devices = root.model.outputDevices
     var options = []
-    for (var i = 0; i < source.length; i++)
-      options.push({ value: String(source[i].name), label: String(source[i].description) })
+    for (var i = 0; i < devices.length; i++)
+      options.push({ value: String(devices[i].name), label: String(devices[i].description) })
     return options
   }
 
+  // Names only, so adjusting a level does not rebuild the row carrying it.
+  readonly property var sourceNames: root.model.sourceNamesFor(root.stripId)
+  readonly property var addableSources: root.model.unusedInputDevices(root.stripId)
+
   readonly property string currentDevice: {
-    if (!root.entity) return ""
-    if (root.kind === "output") {
-      var port = String(root.entity.port_l || "")
-      return port.indexOf(":") > 0 ? port.split(":")[0] : ""
-    }
-    return String(root.entity.source || "")
+    if (!root.entity || root.kind !== "output") return ""
+    var port = String(root.entity.port_l || "")
+    return port.indexOf(":") > 0 ? port.split(":")[0] : ""
   }
 
   function show(kind, entity) {
     root.kind = kind
-    root.entity = entity
+    root.stripId = String(entity.id)
     nameField.text = String(entity.label || entity.id)
     confirmingRemoval = false
   }
@@ -77,7 +84,7 @@ Item {
     // Only when one is actually pending: closing the dialog otherwise sends a
     // cancel for nothing, on every close.
     if (String(root.model.learn.kind) !== "") root.model.midiLearnCancel()
-    root.entity = null
+    root.stripId = ""
     confirmingRemoval = false
   }
 
@@ -192,7 +199,7 @@ Item {
         // ---------------------------------------------------------- device
 
         Text {
-          visible: root.kind !== "channel"
+          visible: root.kind === "output"
           text: "Device"
           color: Util.alpha(Color.foreground, 0.5)
           font.family: Style.font.family
@@ -200,7 +207,7 @@ Item {
         }
 
         Dropdown {
-          visible: root.kind !== "channel"
+          visible: root.kind === "output"
           Layout.fillWidth: true
           showLabel: false
           options: root.deviceOptions
@@ -208,9 +215,143 @@ Item {
           fontFamily: Style.font.family
           onChanged: function (value) {
             if (!value || value === root.currentDevice) return
-            if (root.kind === "output") root.model.retargetOutput(root.stripId, value)
-            else root.model.retargetInput(root.stripId, value)
+            root.model.retargetOutput(root.stripId, value)
           }
+        }
+
+        // ----------------------------------------------------- microphones
+        //
+        // An input can carry several. They are summed into the one virtual
+        // microphone the strip's fader controls, and each keeps its own capture
+        // level here - that level is the device's own, so it applies wherever
+        // the microphone is used, not only to this mixer.
+
+        Text {
+          visible: root.kind === "input"
+          text: root.sourceNames.length === 1 ? "Microphone" : "Microphones"
+          color: Util.alpha(Color.foreground, 0.5)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          visible: root.kind === "input" && root.sourceNames.length === 0
+          Layout.fillWidth: true
+          text: "No microphone is feeding this input."
+          color: Color.urgent
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
+        Repeater {
+          model: root.kind === "input" ? root.sourceNames : []
+
+          delegate: ColumnLayout {
+            required property var modelData
+
+            readonly property string sourceName: String(modelData)
+            readonly property real sourceVolume: root.model.sourceVolume(
+              root.stripId, sourceName)
+
+            Layout.fillWidth: true
+            Layout.bottomMargin: Style.space(4)
+            spacing: Style.space(2)
+
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(6)
+
+              Text {
+                Layout.fillWidth: true
+                text: root.model.deviceDescription(sourceName)
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideRight
+              }
+
+              Text {
+                text: Math.round(level.dragging ? level.liveValue : sourceVolume) + "%"
+                color: Util.alpha(Color.foreground, 0.55)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              Button {
+                // md-close (U+F0156)
+                iconText: "\u{f0156}"
+                iconSize: Style.font.bodySmall
+                horizontalPadding: Style.space(4)
+                verticalPadding: Style.space(2)
+                foreground: Util.alpha(Color.foreground, 0.5)
+                fontFamily: Style.font.family
+                tooltipText: "Remove this microphone from " + root.stripLabel
+                onClicked: root.model.removeInputSource(root.stripId, sourceName)
+              }
+            }
+
+            PanelSlider {
+              id: level
+              Layout.fillWidth: true
+              minimum: 0
+              maximum: 100
+              step: 2
+              integer: true
+              value: dragging ? liveValue : sourceVolume
+              fillColor: Color.accent
+              onMoved: function (value) {
+                root.model.queueSourceVolume(root.stripId, sourceName, value)
+              }
+              onReleased: function (value) {
+                root.model.queueSourceVolume(root.stripId, sourceName, value)
+              }
+            }
+          }
+        }
+
+        RowLayout {
+          visible: root.kind === "input"
+          Layout.fillWidth: true
+          spacing: Style.space(6)
+
+          Dropdown {
+            id: addSource
+            Layout.fillWidth: true
+            showLabel: false
+            options: root.addableSources
+            value: root.addableSources.length > 0 ? root.addableSources[0].value : ""
+            fontFamily: Style.font.family
+            enabled: root.addableSources.length > 0
+            opacity: root.addableSources.length > 0 ? 1.0 : 0.5
+          }
+
+          Button {
+            text: "Add"
+            // md-plus (U+F0415)
+            iconText: "\u{f0415}"
+            iconSize: Style.font.bodySmall
+            fontSize: Style.font.bodySmall
+            bordered: true
+            enabled: root.addableSources.length > 0
+            opacity: root.addableSources.length > 0 ? 1.0 : 0.5
+            foreground: Color.accent
+            fontFamily: Style.font.family
+            tooltipText: "Also feed this microphone into " + root.stripLabel
+            onClicked: {
+              if (addSource.value) root.model.addInputSource(root.stripId, addSource.value)
+            }
+          }
+        }
+
+        Text {
+          visible: root.kind === "input" && root.addableSources.length === 0
+          Layout.fillWidth: true
+          text: "Every capture device is already feeding this input."
+          color: Util.alpha(Color.foreground, 0.4)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
         }
 
         PanelSeparator { Layout.fillWidth: true }

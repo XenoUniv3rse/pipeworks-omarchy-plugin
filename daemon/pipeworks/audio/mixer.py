@@ -61,15 +61,24 @@ class Mixer:
     def output_sink_for(self, out_id):
         return self.outputs_by_id[out_id]["port_l"].split(":")[0]
 
-    def capture_ports_for_input(self, inp):
-        """Where an input's audio comes from.
+    def input_sources(self, inp):
+        """The capture devices feeding one input, oldest first."""
+        sources = inp.get("sources")
+        return sources if isinstance(sources, list) else []
 
-        Tolerates configs written before these were recorded - the original
+    def capture_ports_for_source(self, source):
+        """Where one microphone's audio comes from.
+
+        Tolerates entries written before ports were recorded - the original
         hardcoded mic predates them - by resolving from the device instead.
         """
-        if inp.get("capture_l") and inp.get("capture_r"):
-            return inp["capture_l"], inp["capture_r"]
-        return self._backend.capture_ports(inp["source"])
+        if source.get("capture_l") and source.get("capture_r"):
+            return source["capture_l"], source["capture_r"]
+        return self._backend.capture_ports(source["name"])
+
+    def capture_ports_for_input(self, inp):
+        """Every (left, right) pair feeding one input."""
+        return [self.capture_ports_for_source(src) for src in self.input_sources(inp)]
 
     def _unique_slug(self, label, fallback):
         base = "".join(c if c.isalnum() else "_" for c in label.lower()).strip("_") or fallback
@@ -113,10 +122,15 @@ class Mixer:
             {
                 "id": slug,
                 "label": label,
-                "source": source_name,
                 "target_sink": f"virtual_{slug}",
-                "capture_l": capture_l,
-                "capture_r": capture_r,
+                "sources": [
+                    {
+                        "name": source_name,
+                        "volume": 100,
+                        "capture_l": capture_l,
+                        "capture_r": capture_r,
+                    }
+                ],
             }
         )
         self.inputs_by_id[slug] = self.config["inputs"][-1]
@@ -190,16 +204,80 @@ class Mixer:
         self.apply_all()
 
     def retarget_input(self, input_id, source_name):
-        """Points an existing input strip at a different capture device."""
-        inp = self.inputs_by_id[input_id]
-        old_l, old_r = self.capture_ports_for_input(inp)
-        self._backend.disconnect(old_l, f"{inp['target_sink']}:playback_FL")
-        self._backend.disconnect(old_r, f"{inp['target_sink']}:playback_FR")
+        """Swaps an input's first capture device for another.
 
-        inp["source"] = source_name
-        inp["capture_l"], inp["capture_r"] = self._backend.capture_ports(source_name)
+        Kept for callers that predate an input having a list of them; the
+        window adds and removes sources individually instead.
+        """
+        inp = self.inputs_by_id[input_id]
+        sources = self.input_sources(inp)
+        if not sources:
+            self.add_input_source(input_id, source_name)
+            return
+        self._unlink_source(inp, sources[0])
+        sources[0]["name"] = source_name
+        sources[0]["capture_l"], sources[0]["capture_r"] = self._backend.capture_ports(
+            source_name
+        )
         self._repository.save(self.config)
         self.apply_all()
+
+    # ------------------------------------------------------------------
+    # An input's microphones
+    #
+    # Every source is linked into the same virtual sink and PipeWire sums them,
+    # so adding one is only extra links on hardware that already exists - no
+    # reprovisioning, and no break in audio, unlike adding a whole input.
+
+    def add_input_source(self, input_id, source_name):
+        inp = self.inputs_by_id[input_id]
+        sources = self.input_sources(inp)
+        if any(src.get("name") == source_name for src in sources):
+            return  # already feeding this input
+        capture_l, capture_r = self._backend.capture_ports(source_name)
+        sources.append(
+            {
+                "name": source_name,
+                "volume": 100,
+                "capture_l": capture_l,
+                "capture_r": capture_r,
+            }
+        )
+        inp["sources"] = sources
+        self._repository.save(self.config)
+        self.apply_all()
+
+    def remove_input_source(self, input_id, source_name):
+        inp = self.inputs_by_id[input_id]
+        remaining = []
+        for source in self.input_sources(inp):
+            if source.get("name") == source_name:
+                # Unhook it first: leaving the link in place keeps the
+                # microphone live in a strip that no longer lists it.
+                self._unlink_source(inp, source)
+            else:
+                remaining.append(source)
+        inp["sources"] = remaining
+        self._repository.save(self.config)
+        self.apply_all()
+
+    def set_input_source_volume(self, input_id, source_name, percent):
+        inp = self.inputs_by_id[input_id]
+        for source in self.input_sources(inp):
+            if source.get("name") == source_name:
+                source["volume"] = percent
+                self._backend.set_source_volume(source_name, percent)
+                self._throttled(
+                    ("input_source", input_id, source_name),
+                    lambda: self._repository.save(self.config),
+                )
+                self.on_state_changed()
+                return
+
+    def _unlink_source(self, inp, source):
+        capture_l, capture_r = self.capture_ports_for_source(source)
+        self._backend.disconnect(capture_l, f"{inp['target_sink']}:playback_FL")
+        self._backend.disconnect(capture_r, f"{inp['target_sink']}:playback_FR")
 
     def rename(self, entity, label):
         entity["label"] = label
@@ -403,9 +481,11 @@ class Mixer:
             input_id = inp["id"]
             self._backend.set_sink_volume(inp["target_sink"], self.config["volume"][input_id])
             self._apply_mute(input_id)
-            capture_l, capture_r = self.capture_ports_for_input(inp)
-            self._backend.connect(capture_l, f"{inp['target_sink']}:playback_FL")
-            self._backend.connect(capture_r, f"{inp['target_sink']}:playback_FR")
+            for source in self.input_sources(inp):
+                capture_l, capture_r = self.capture_ports_for_source(source)
+                self._backend.connect(capture_l, f"{inp['target_sink']}:playback_FL")
+                self._backend.connect(capture_r, f"{inp['target_sink']}:playback_FR")
+                self._backend.set_source_volume(source["name"], source.get("volume", 100))
 
         for out_id in self.outputs_by_id:
             self._backend.set_sink_volume(
@@ -423,9 +503,9 @@ class Mixer:
                     links.add((f"{sink}_out:output_FL", output["port_l"]))
                     links.add((f"{sink}_out:output_FR", output["port_r"]))
         for inp in self.config["inputs"]:
-            capture_l, capture_r = self.capture_ports_for_input(inp)
-            links.add((capture_l, f"{inp['target_sink']}:playback_FL"))
-            links.add((capture_r, f"{inp['target_sink']}:playback_FR"))
+            for capture_l, capture_r in self.capture_ports_for_input(inp):
+                links.add((capture_l, f"{inp['target_sink']}:playback_FL"))
+                links.add((capture_r, f"{inp['target_sink']}:playback_FR"))
         return links
 
     def missing_links(self):
