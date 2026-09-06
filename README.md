@@ -28,7 +28,7 @@ sudo pacman -S python-gobject python-rtmidi
 Effects need two more, and only the effects need them — the mixer runs without:
 
 ```sh
-sudo pacman -S noise-suppression-for-voice lsp-plugins-lv2
+sudo pacman -S noise-suppression-for-voice lsp-plugins-lv2 swh-plugins
 ```
 
 It draws nothing itself, so it needs no GUI toolkit — `python-gobject` is here
@@ -118,8 +118,8 @@ name or its id.
 * **Physical outputs** — send any channel to any combination of real output
   devices, each with its own fader, mute and solo.
 * **Effects** — a microphone channel strip per input: noise suppression,
-  high-pass, gate, compressor and three-band tone, switched on individually and
-  adjusted while you listen. Switching one on briefly interrupts that strip;
+  high-pass, gate, compressor, three-band tone and reverb, switched on
+  individually and adjusted while you listen. Switching one on briefly interrupts that strip;
   moving a control does not.
 * **MIDI control** — Learn any fader or button on a control surface, with LED
   feedback on boards that support it.
@@ -201,9 +201,17 @@ chain's nodes are declared `node.autoconnect = false` as well as passive: withou
 that, WirePlumber helpfully connects the strip's own published microphone into
 the chain's input, which is a feedback loop.
 
-Effects come from PipeWire's builtin DSP (the biquads behind high-pass and tone)
-plus two plugin packages — RNNoise for noise suppression, LSP for the gate and
-compressor. Values are stored in the units shown on screen, in dB, Hz and
+Effects come from PipeWire's builtin DSP (the biquads behind high-pass and
+tone) plus three plugin packages — RNNoise for noise suppression, LSP for the
+gate and compressor, and Steve Harris's plate for the reverb.
+
+The reverb is worth a note, because it took a while to find out. The plate has
+one audio input and two outputs, and filter-chain silences a node whose ports
+are not all connected: taking only its left output produced a chain that
+loaded, exposed all three controls, and passed no audio whatsoever. Both
+outputs are summed into a mixer instead, which uses every port and leaves the
+effect mono in and mono out, so the graph stays mono and filter-chain still
+replicates it per channel. Values are stored in the units shown on screen, in dB, Hz and
 milliseconds, and converted on the way to the plugin, because LSP takes
 thresholds as linear amplitude.
 

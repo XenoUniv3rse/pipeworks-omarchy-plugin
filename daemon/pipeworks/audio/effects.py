@@ -254,6 +254,79 @@ EFFECTS = [
             },
         ],
     },
+    {
+        "id": "reverb",
+        "label": "Reverb",
+        "description": "Adds the sound of a space around your voice.",
+        # Steve Harris's plate reverb is one audio input and two outputs, and
+        # filter-chain silences a node whose ports are not all connected -
+        # taking only the left output produced a chain that loaded, exposed its
+        # controls, and passed no audio at all. Summing both outputs into a
+        # mixer uses every port and leaves the effect mono in, mono out, so the
+        # graph stays mono and filter-chain still replicates it per channel.
+        "nodes": [
+            {
+                "name": "reverb",
+                "type": "ladspa",
+                "plugin": "plate_1423",
+                "label": "plate",
+                "in_port": "Input",
+                "out_port": "Left output",
+            },
+            {
+                "name": "reverb_sum",
+                "type": "builtin",
+                "label": "mixer",
+                "in_port": "In 1",
+                "out_port": "Out",
+                # Half each: summing the plate's two sides at full gain would
+                # be six decibels louder than what went in.
+                "control": {"Gain 1": 0.5, "Gain 2": 0.5},
+            },
+        ],
+        "links": [
+            ("reverb", "Left output", "reverb_sum", "In 1"),
+            ("reverb", "Right output", "reverb_sum", "In 2"),
+        ],
+        "controls": [
+            {
+                "id": "mix",
+                "label": "Mix",
+                "help": "How much of the space you hear against the dry voice.",
+                "node": "reverb",
+                "port": "Dry/wet mix",
+                "unit": "%",
+                "minimum": 0.0,
+                "maximum": 100.0,
+                "default": 20.0,
+                "scale": "percent",
+            },
+            {
+                "id": "decay",
+                "label": "Decay",
+                "help": "How long the tail takes to fade away.",
+                "node": "reverb",
+                "port": "Reverb time",
+                "unit": "s",
+                "minimum": 0.1,
+                "maximum": 8.5,
+                "default": 1.5,
+                "scale": "direct",
+            },
+            {
+                "id": "damping",
+                "label": "Damping",
+                "help": "Softens the tail. Higher is darker and less splashy.",
+                "node": "reverb",
+                "port": "Damping",
+                "unit": "%",
+                "minimum": 0.0,
+                "maximum": 100.0,
+                "default": 50.0,
+                "scale": "percent",
+            },
+        ],
+    },
 ]
 
 EFFECTS_BY_ID = {effect["id"]: effect for effect in EFFECTS}
@@ -277,11 +350,14 @@ def plugin_value(spec, value):
     LSP takes thresholds and gains as linear amplitude rather than dB, so a
     threshold shown as -45 dB reaches the plugin as 0.0056. Builtin biquads take
     their shelf gains in dB directly, which is why the scale is per control and
-    not per unit.
+    not per unit. A mix shown as a percentage reaches the plugin as a fraction.
     """
     number = float(value)
-    if spec.get("scale") == "db":
+    scale = spec.get("scale")
+    if scale == "db":
         return 10.0 ** (number / 20.0)
+    if scale == "percent":
+        return number / 100.0
     return number
 
 
@@ -340,8 +416,16 @@ def build_graph(strip_effects):
         # Wire this effect's own nodes together, then hang it off the previous
         # effect's last node.
         by_name = {node["name"]: node for node in effect["nodes"]}
-        for source, dest in effect.get("links", []):
-            links.append((source, by_name[source]["out_port"], dest, by_name[dest]["in_port"]))
+        for link in effect.get("links", []):
+            if len(link) == 4:
+                # Ports given explicitly, for a node whose two outputs go to
+                # different inputs of the next one.
+                links.append(tuple(link))
+            else:
+                source, dest = link
+                links.append(
+                    (source, by_name[source]["out_port"], dest, by_name[dest]["in_port"])
+                )
         head = effect["nodes"][0]
         if previous_tail:
             links.append(
