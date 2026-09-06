@@ -114,6 +114,9 @@ class PipeworksApplication(Gio.Application):
             ("add-input-source", "(ss)", self._on_add_input_source),
             ("remove-input-source", "(ss)", self._on_remove_input_source),
             ("set-input-source-volume", "(ssd)", self._on_set_input_source_volume),
+            # Effects
+            ("set-effect-enabled", "(ssb)", self._on_set_effect_enabled),
+            ("set-effect-control", "(sssd)", self._on_set_effect_control),
             # Control surface
             ("midi-learn", "(ss)", self._on_midi_learn),
             ("midi-learn-cancel", None, self._on_midi_learn_cancel),
@@ -285,6 +288,23 @@ class PipeworksApplication(Gio.Application):
         input_id, source_name, percent = parameter.unpack()
         if source_name and self._entity("input", input_id):
             self._mixer().set_input_source_volume(input_id, source_name, percent)
+
+    # ------------------------------------------------------------------
+    # Effects
+    #
+    # Switching one on rebuilds that strip's filter graph and restarts its chain
+    # host, which blips that strip alone. Moving a control is live.
+
+    def _on_set_effect_enabled(self, _action, parameter):
+        strip_id, effect_id, enabled = parameter.unpack()
+        if self._entity("input", strip_id):
+            self._mixer().set_effect_enabled(strip_id, effect_id, enabled)
+            self._republish()
+
+    def _on_set_effect_control(self, _action, parameter):
+        strip_id, effect_id, control_id, value = parameter.unpack()
+        if self._entity("input", strip_id):
+            self._mixer().set_effect_control(strip_id, effect_id, control_id, value)
 
     # ------------------------------------------------------------------
     # Control surface

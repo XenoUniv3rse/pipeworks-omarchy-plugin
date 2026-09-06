@@ -32,6 +32,9 @@ DEFAULT_CONFIG = {
             "id": "mic",
             "label": "Mic",
             "target_sink": "virtual_mic",
+            # Effects are off until asked for: a chain costs a process and some
+            # latency, and a mixer should sound like the microphone by default.
+            "effects": {},
             "sources": [
                 {
                     "name": "alsa_input.usb-MV-SILICON_fifine_Microphone_20190808-00.analog-stereo",
@@ -157,6 +160,10 @@ class ConfigRepository:
                 if inp.get(key):
                     source[key] = inp.pop(key)
             inp["sources"] = [source] if source["name"] else []
+
+        # Inputs written before effects existed simply have none.
+        for inp in config.get("inputs", []):
+            inp.setdefault("effects", {})
 
         for key, value in DEFAULT_CONFIG.items():
             config.setdefault(key, copy.deepcopy(value))

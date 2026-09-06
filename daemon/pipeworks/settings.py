@@ -16,6 +16,14 @@ AUTOSTART_PATH = os.path.expanduser("~/.config/autostart/pipeworks.desktop")
 # window watching one is watching the other in the same directory.
 STATE_PATH = os.path.expanduser("~/.config/pipeworks/state.json")
 
+# Generated filter-chain configs, one per strip that carries effects. Each is
+# run by its own `pipewire -c` process so switching an effect on restarts that
+# chain alone rather than the whole audio server.
+FX_CONF_DIR = os.path.expanduser("~/.config/pipeworks/effects")
+
+# Prefix for the nodes a filter chain publishes, so the graph can find them.
+FX_NODE_PREFIX = "pipeworks_fx"
+
 # Locations used before the application was renamed. Read once to carry a
 # user's settings across, and cleaned up so stale virtual-device definitions
 # cannot be loaded alongside the current ones.

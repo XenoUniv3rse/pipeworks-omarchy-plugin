@@ -17,6 +17,7 @@ import os
 import tempfile
 
 from . import settings
+from .audio import effects as effects_module
 
 
 class StatePublisher:
@@ -72,6 +73,10 @@ class StatePublisher:
                 "key": learning[1] if learning else "",
             },
             "midiConnected": getattr(self._midi, "connected", False),
+            # What effects exist and the range of every control. Published
+            # rather than hardcoded in the window, so the two cannot disagree
+            # about what a slider means.
+            "effects": effects_module.catalogue(),
             "status": self._status,
             "statusSerial": self._status_serial,
         }

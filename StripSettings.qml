@@ -354,6 +354,120 @@ Item {
           wrapMode: Text.WordWrap
         }
 
+        PanelSeparator {
+          visible: root.kind === "input"
+          Layout.fillWidth: true
+        }
+
+        // --------------------------------------------------------- effects
+        //
+        // Switching one on rebuilds the strip's filter graph, which its chain
+        // host only picks up when it restarts - so a switch blips this strip's
+        // audio, while every slider below is live.
+
+        Text {
+          visible: root.kind === "input"
+          text: "Effects"
+          color: Util.alpha(Color.foreground, 0.5)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
+        Repeater {
+          model: root.kind === "input" ? root.model.effectsCatalogue : []
+
+          delegate: ColumnLayout {
+            required property var modelData
+
+            readonly property string effectId: String(modelData.id)
+            readonly property bool on: root.model.effectEnabled(root.stripId, effectId)
+
+            Layout.fillWidth: true
+            Layout.bottomMargin: Style.space(2)
+            spacing: Style.space(2)
+
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(6)
+
+              Button {
+                text: String(modelData.label)
+                fontSize: Style.font.bodySmall
+                horizontalPadding: Style.space(6)
+                verticalPadding: Style.space(3)
+                bordered: true
+                active: on
+                foreground: on ? Color.accent : Util.alpha(Color.foreground, 0.55)
+                fontFamily: Style.font.family
+                tooltipText: String(modelData.description)
+                onClicked: root.model.setEffectEnabled(root.stripId, effectId, !on)
+              }
+
+              Text {
+                Layout.fillWidth: true
+                text: String(modelData.description)
+                color: Util.alpha(Color.foreground, on ? 0.5 : 0.32)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+            }
+
+            // Controls appear only for an effect that is on: a slider for
+            // something not in the graph would move nothing.
+            Repeater {
+              model: on ? modelData.controls : []
+
+              delegate: RowLayout {
+                required property var modelData
+
+                readonly property real amount: root.model.effectControl(
+                  root.stripId, effectId, modelData)
+
+                Layout.fillWidth: true
+                Layout.leftMargin: Style.space(10)
+                spacing: Style.space(6)
+
+                Text {
+                  Layout.preferredWidth: Style.space(74)
+                  text: String(modelData.label)
+                  color: Util.alpha(Color.foreground, 0.6)
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+
+                PanelSlider {
+                  id: knob
+                  Layout.fillWidth: true
+                  minimum: Number(modelData.minimum)
+                  maximum: Number(modelData.maximum)
+                  step: (Number(modelData.maximum) - Number(modelData.minimum)) / 50
+                  value: dragging ? liveValue : amount
+                  fillColor: Color.accent
+                  onMoved: function (value) {
+                    root.model.queueEffectControl(root.stripId, effectId, modelData.id, value)
+                  }
+                  onReleased: function (value) {
+                    root.model.queueEffectControl(root.stripId, effectId, modelData.id, value)
+                  }
+                }
+
+                Text {
+                  Layout.preferredWidth: Style.space(52)
+                  horizontalAlignment: Text.AlignRight
+                  text: (knob.dragging ? knob.liveValue : amount).toFixed(
+                          Number(modelData.maximum) - Number(modelData.minimum) > 40 ? 0 : 1)
+                        + " " + String(modelData.unit)
+                  color: Util.alpha(Color.foreground, 0.55)
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+              }
+            }
+          }
+        }
+
         PanelSeparator { Layout.fillWidth: true }
 
         // ------------------------------------------------------------ MIDI

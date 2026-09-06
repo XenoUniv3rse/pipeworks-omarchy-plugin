@@ -54,6 +54,9 @@ QtObject {
     ? state.devices.outputs : []
   readonly property var inputDevices: state.devices && state.devices.inputs instanceof Array
     ? state.devices.inputs : []
+  // What effects exist and what each control means. Published by the daemon so
+  // there is one description of them, not one here and one there.
+  readonly property var effectsCatalogue: state.effects instanceof Array ? state.effects : []
   readonly property var autostart: state.autostart || ({})
   readonly property var learn: state.learn || ({})
   readonly property bool midiConnected: state.midiConnected === true
@@ -143,6 +146,53 @@ QtObject {
       if (String(sources[i].name) === String(name))
         return sources[i].volume === undefined ? 100 : Number(sources[i].volume)
     return 100
+  }
+
+  // ---------------------------------------------------------------- effects
+
+  // Read live from config for the same reason microphone levels are: a dialog
+  // open on a strip must show what is actually set, not what was set when it
+  // opened.
+  function effectState(inputId, effectId) {
+    var entity = root.entityFor("input", inputId)
+    var all = (entity && entity.effects) || ({})
+    return all[effectId] || ({})
+  }
+
+  function effectEnabled(inputId, effectId) {
+    return root.effectState(inputId, effectId).enabled === true
+  }
+
+  function effectControl(inputId, effectId, control) {
+    var stored = root.effectState(inputId, effectId).controls || ({})
+    if (stored[control.id] !== undefined) return Number(stored[control.id])
+    return Number(control.default)
+  }
+
+  // Whether any effect is on, for the summary a strip shows without opening.
+  function effectsActive(inputId) {
+    for (var i = 0; i < root.effectsCatalogue.length; i++)
+      if (root.effectEnabled(inputId, root.effectsCatalogue[i].id)) return true
+    return false
+  }
+
+  function setEffectEnabled(inputId, effectId, enabled) {
+    root.activate("set-effect-enabled",
+      "[<(" + root.quoted(inputId) + ", " + root.quoted(effectId) + ", "
+      + (enabled ? "true" : "false") + ")>]")
+  }
+
+  function setEffectControl(inputId, effectId, controlId, value) {
+    root.activate("set-effect-control",
+      "[<(" + root.quoted(inputId) + ", " + root.quoted(effectId) + ", "
+      + root.quoted(controlId) + ", " + value.toFixed(3) + ")>]")
+  }
+
+  function queueEffectControl(inputId, effectId, controlId, value) {
+    root.pending["effect:" + inputId + "/" + effectId + "/" + controlId] = {
+      kind: "effect", id: inputId, effect: effectId, control: controlId, value: value
+    }
+    root._flushTimer.running = true
   }
 
   // A capture device's human name. Falls back to the node name, which is what
@@ -391,7 +441,9 @@ QtObject {
       for (var key in root.pending) {
         var entry = root.pending[key]
         delete root.pending[key]
-        if (entry.kind === "source")
+        if (entry.kind === "effect")
+          root.setEffectControl(entry.id, entry.effect, entry.control, entry.value)
+        else if (entry.kind === "source")
           root.setInputSourceVolume(entry.id, entry.source, entry.value)
         else if (entry.kind === "output") root.setOutputVolume(entry.id, entry.value)
         else root.setVolume(entry.id, entry.value)

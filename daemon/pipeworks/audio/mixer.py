@@ -9,6 +9,7 @@ free of PipeWire, subprocess and GTK, and makes the rules testable with fakes.
 import time
 
 from .. import settings
+from . import effects as effects_module
 
 CHANNEL = "channel"
 INPUT = "input"
@@ -16,11 +17,14 @@ OUTPUT = "output"
 
 
 class Mixer:
-    def __init__(self, config, repository, backend, scheduler):
+    def __init__(self, config, repository, backend, scheduler, filters=None):
         self.config = config
         self._repository = repository
         self._backend = backend
         self._schedule = scheduler
+        # Effects are optional: without a filter host the mixer behaves exactly
+        # as it did before they existed, which keeps tests free of PipeWire.
+        self._filters = filters
 
         self.channels_by_id = {c["id"]: c for c in config["channels"]}
         self.inputs_by_id = {i["id"]: i for i in config["inputs"]}
@@ -79,6 +83,35 @@ class Mixer:
     def capture_ports_for_input(self, inp):
         """Every (left, right) pair feeding one input."""
         return [self.capture_ports_for_source(src) for src in self.input_sources(inp)]
+
+    def effects_active(self, inp):
+        """Whether this input's audio should travel through a filter chain."""
+        return bool(self._filters) and bool(
+            effects_module.enabled_effects(inp.get("effects"))
+        )
+
+    def input_destination(self, inp):
+        """Where an input's microphones feed: its effects chain, or its sink.
+
+        With effects on, the microphones play into the chain and the chain plays
+        into the sink, so the strip's own fader still sits after everything.
+        """
+        if self.effects_active(inp):
+            node = self._filters.input_node(inp["id"])
+            return f"{node}:input_FL", f"{node}:input_FR"
+        sink = inp["target_sink"]
+        return f"{sink}:playback_FL", f"{sink}:playback_FR"
+
+    def effects_tail_links(self, inp):
+        """The links joining a chain's output to the strip's sink."""
+        if not self.effects_active(inp):
+            return []
+        node = self._filters.output_node(inp["id"])
+        sink = inp["target_sink"]
+        return [
+            (f"{node}:output_FL", f"{sink}:playback_FL"),
+            (f"{node}:output_FR", f"{sink}:playback_FR"),
+        ]
 
     def _unique_slug(self, label, fallback):
         base = "".join(c if c.isalnum() else "_" for c in label.lower()).strip("_") or fallback
@@ -140,6 +173,10 @@ class Mixer:
         return slug
 
     def remove_input(self, input_id):
+        # Stop and forget its effects chain, or a host process outlives the
+        # strip it belonged to and its config file is left behind.
+        if self._filters:
+            self._filters.forget(input_id)
         self.config["inputs"] = [i for i in self.config["inputs"] if i["id"] != input_id]
         self.inputs_by_id.pop(input_id, None)
         for store in ("volume", "muted"):
@@ -261,6 +298,59 @@ class Mixer:
         self._repository.save(self.config)
         self.apply_all()
 
+    # ------------------------------------------------------------------
+    # Effects
+
+    def set_effect_enabled(self, strip_id, effect_id, enabled):
+        """Switches one effect on or off.
+
+        This rebuilds the graph, which only takes effect when the chain host
+        restarts - so unlike moving a control, it briefly interrupts this strip.
+        """
+        if effect_id not in effects_module.EFFECTS_BY_ID:
+            return
+        inp = self.inputs_by_id.get(strip_id)
+        if not inp:
+            return
+        stored = inp.setdefault("effects", {})
+        entry = stored.setdefault(effect_id, {"enabled": False, "controls": {}})
+        if bool(entry.get("enabled")) == bool(enabled):
+            return
+        entry["enabled"] = bool(enabled)
+        entry.setdefault("controls", {})
+        # Seed the controls so a front end has values to show immediately.
+        for control_id, value in effects_module.default_controls(effect_id).items():
+            entry["controls"].setdefault(control_id, value)
+
+        self._rewire_input(inp)
+        self._repository.save(self.config)
+        self.apply_all()
+        self.on_state_changed()
+
+    def set_effect_control(self, strip_id, effect_id, control_id, value):
+        """Moves one control on a running chain. No restart, no interruption."""
+        spec = effects_module.control_spec(effect_id, control_id)
+        inp = self.inputs_by_id.get(strip_id)
+        if not spec or not inp:
+            return
+        entry = inp.setdefault("effects", {}).setdefault(
+            effect_id, {"enabled": False, "controls": {}}
+        )
+        clamped = max(spec["minimum"], min(spec["maximum"], float(value)))
+        entry.setdefault("controls", {})[control_id] = clamped
+
+        if self.effects_active(inp):
+            self._filters.set_control(
+                strip_id,
+                effects_module.port_name(spec),
+                effects_module.plugin_value(spec, clamped),
+            )
+        self._throttled(
+            ("effect", strip_id, effect_id, control_id),
+            lambda: self._repository.save(self.config),
+        )
+        self.on_state_changed()
+
     def set_input_source_volume(self, input_id, source_name, percent):
         inp = self.inputs_by_id[input_id]
         for source in self.input_sources(inp):
@@ -276,8 +366,35 @@ class Mixer:
 
     def _unlink_source(self, inp, source):
         capture_l, capture_r = self.capture_ports_for_source(source)
-        self._backend.disconnect(capture_l, f"{inp['target_sink']}:playback_FL")
-        self._backend.disconnect(capture_r, f"{inp['target_sink']}:playback_FR")
+        # Both possible destinations: whether effects were on when this link was
+        # made is not worth tracking, and disconnecting a link that was never
+        # there is harmless.
+        for dest_l, dest_r in self._possible_destinations(inp):
+            self._backend.disconnect(capture_l, dest_l)
+            self._backend.disconnect(capture_r, dest_r)
+
+    def _possible_destinations(self, inp):
+        sink = inp["target_sink"]
+        destinations = [(f"{sink}:playback_FL", f"{sink}:playback_FR")]
+        if self._filters:
+            node = self._filters.input_node(inp["id"])
+            destinations.append((f"{node}:input_FL", f"{node}:input_FR"))
+        return destinations
+
+    def _rewire_input(self, inp):
+        """Tears an input's links down so apply_all can rebuild them.
+
+        Turning effects on or off moves where every microphone points, and a
+        stale link left behind would keep the old path live alongside the new
+        one - both audible at once.
+        """
+        for source in self.input_sources(inp):
+            self._unlink_source(inp, source)
+        if self._filters:
+            node = self._filters.output_node(inp["id"])
+            sink = inp["target_sink"]
+            self._backend.disconnect(f"{node}:output_FL", f"{sink}:playback_FL")
+            self._backend.disconnect(f"{node}:output_FR", f"{sink}:playback_FR")
 
     def rename(self, entity, label):
         entity["label"] = label
@@ -481,11 +598,18 @@ class Mixer:
             input_id = inp["id"]
             self._backend.set_sink_volume(inp["target_sink"], self.config["volume"][input_id])
             self._apply_mute(input_id)
+            # Start or stop this strip's effects chain before linking anything,
+            # so the nodes the links point at already exist.
+            if self._filters:
+                self._filters.apply(input_id, inp["label"], inp.get("effects"))
+            dest_l, dest_r = self.input_destination(inp)
             for source in self.input_sources(inp):
                 capture_l, capture_r = self.capture_ports_for_source(source)
-                self._backend.connect(capture_l, f"{inp['target_sink']}:playback_FL")
-                self._backend.connect(capture_r, f"{inp['target_sink']}:playback_FR")
+                self._backend.connect(capture_l, dest_l)
+                self._backend.connect(capture_r, dest_r)
                 self._backend.set_source_volume(source["name"], source.get("volume", 100))
+            for chain_out, sink_in in self.effects_tail_links(inp):
+                self._backend.connect(chain_out, sink_in)
 
         for out_id in self.outputs_by_id:
             self._backend.set_sink_volume(
@@ -503,9 +627,11 @@ class Mixer:
                     links.add((f"{sink}_out:output_FL", output["port_l"]))
                     links.add((f"{sink}_out:output_FR", output["port_r"]))
         for inp in self.config["inputs"]:
+            dest_l, dest_r = self.input_destination(inp)
             for capture_l, capture_r in self.capture_ports_for_input(inp):
-                links.add((capture_l, f"{inp['target_sink']}:playback_FL"))
-                links.add((capture_r, f"{inp['target_sink']}:playback_FR"))
+                links.add((capture_l, dest_l))
+                links.add((capture_r, dest_r))
+            links.update(self.effects_tail_links(inp))
         return links
 
     def missing_links(self):

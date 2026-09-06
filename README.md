@@ -25,6 +25,12 @@ PyPI. Install them once:
 sudo pacman -S python-gobject python-rtmidi
 ```
 
+Effects need two more, and only the effects need them — the mixer runs without:
+
+```sh
+sudo pacman -S noise-suppression-for-voice lsp-plugins-lv2
+```
+
 It draws nothing itself, so it needs no GUI toolkit — `python-gobject` is here
 for GLib and its session-bus plumbing, not for GTK.
 
@@ -111,6 +117,10 @@ name or its id.
   mic and a desk mic reach a call as one device.
 * **Physical outputs** — send any channel to any combination of real output
   devices, each with its own fader, mute and solo.
+* **Effects** — a microphone channel strip per input: noise suppression,
+  high-pass, gate, compressor and three-band tone, switched on individually and
+  adjusted while you listen. Switching one on briefly interrupts that strip;
+  moving a control does not.
 * **MIDI control** — Learn any fader or button on a control surface, with LED
   feedback on boards that support it.
 * **Application routing** — every channel shows the applications playing into
@@ -159,7 +169,8 @@ Application routing: `move-stream`.
 Structural: `add-channel`, `add-input`, `add-output`, `remove-strip`,
 `rename-strip`, `retarget-input`, `retarget-output`.
 An input's microphones: `add-input-source`, `remove-input-source`,
-`set-input-source-volume`. These need no reprovisioning — the sources all feed
+`set-input-source-volume`.
+Effects: `set-effect-enabled`, `set-effect-control`. These need no reprovisioning — the sources all feed
 one virtual sink that already exists, so adding one is only extra links and
 does not interrupt audio the way adding a whole input does.
 Control surface: `midi-learn`, `midi-learn-cancel`.
@@ -170,6 +181,31 @@ the daemon publishes it as `~/.config/pipeworks/state.json`: running
 applications, available devices, MIDI Learn progress, autostart status. It is
 only refreshed while a window says it is watching (`set-state-watch`), so an
 idle daemon polls nothing.
+
+## Effects
+
+Each strip carrying effects runs its own filter chain: a generated config in
+`~/.config/pipeworks/effects/` hosted by a `pipewire -c` process the daemon
+supervises. That is the pattern PipeWire ships a systemd unit for, and it is a
+process per strip on purpose — switching an effect on rewrites the graph, and a
+graph only takes effect when its host restarts. One host per strip means that
+restart blips one microphone rather than the whole audio server.
+
+Control values need none of that. Every control port of a running chain is a
+node property, so a slider is applied live to the running graph and only the
+saved value goes to disk.
+
+With effects on, an input's microphones feed the chain and the chain feeds the
+strip's sink, so the strip's own fader and mute still sit after everything. The
+chain's nodes are declared `node.autoconnect = false` as well as passive: without
+that, WirePlumber helpfully connects the strip's own published microphone into
+the chain's input, which is a feedback loop.
+
+Effects come from PipeWire's builtin DSP (the biquads behind high-pass and tone)
+plus two plugin packages — RNNoise for noise suppression, LSP for the gate and
+compressor. Values are stored in the units shown on screen, in dB, Hz and
+milliseconds, and converted on the way to the plugin, because LSP takes
+thresholds as linear amplitude.
 
 ## Configuration
 

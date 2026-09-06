@@ -22,6 +22,7 @@ from .midi.controller import MidiController, MidiPortsNotFound, NullMidiControll
 from .pipewire.backend import PipeWireBackend
 from .publish import StatePublisher
 from .pipewire.devices import DeviceRegistry
+from .pipewire.filters import FilterChainHost
 from .pipewire.graph import GraphLinker
 from .pipewire.ports import PortResolver
 from .pipewire.provisioning import LoopbackProvisioner
@@ -57,8 +58,10 @@ class MixerService:
         self.devices = DeviceRegistry(self.runner)
         self.streams = StreamRouter(self.runner, self.devices)
 
+        self.filters = FilterChainHost(self.runner)
         self.mixer = Mixer(
-            self.config, self.repository, self.backend, scheduler=_glib_scheduler
+            self.config, self.repository, self.backend,
+            scheduler=_glib_scheduler, filters=self.filters,
         )
         self.bindings = MidiBindings(self.config, self.repository)
         self.midi = self._open_control_surface()
@@ -99,6 +102,9 @@ class MixerService:
             GLib.source_remove(self._heal_timer)
             self._heal_timer = None
         self._stop_state_timer()
+        # Effect chains are our children; leaving them running would orphan a
+        # pipewire process per strip every time the daemon restarts.
+        self.filters.stop_all()
 
     # ------------------------------------------------------------------
     # Published state
