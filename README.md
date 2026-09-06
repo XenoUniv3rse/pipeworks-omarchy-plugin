@@ -60,6 +60,7 @@ watchdog carry on, and only the level meters stop.
 | Panel fader | Set that strip's level |
 | Panel speaker icon | Toggle mute |
 | Panel output buttons | Toggle routing of that channel to that output |
+| Input output buttons | Monitor that input through that output |
 
 The panel is laid out as a mixer: every strip is vertical and they sit side by
 side, Inputs then Channels then Outputs, divided by a rule. Each carries a
@@ -117,6 +118,10 @@ name or its id.
   mic and a desk mic reach a call as one device.
 * **Physical outputs** — send any channel to any combination of real output
   devices, each with its own fader, mute and solo.
+* **Monitoring** — an input can be routed to an output to hear yourself, which
+  is how you tell what the effects are actually doing. Per output rather than a
+  single switch, so it can go to a headset without howling through speakers.
+  Off by default, and it follows the strip's mute and fader.
 * **Effects** — a microphone channel strip per input: noise suppression,
   high-pass, gate, compressor, three-band tone and reverb, switched on
   individually and adjusted while you listen. Switching one on briefly interrupts that strip;

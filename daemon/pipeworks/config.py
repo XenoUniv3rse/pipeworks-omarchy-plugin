@@ -62,7 +62,10 @@ DEFAULT_CONFIG = {
     "volume": {"system": 70, "game": 70, "music": 70, "browser": 70, "chat": 70, "mic": 70},
     "muted": {"system": False, "game": False, "music": False, "browser": False, "chat": False, "mic": False},
     "solo": {"system": False, "game": False, "music": False, "browser": False, "chat": False},
+    # Channels are routed to outputs by default; an input routed to an output is
+    # monitoring - hearing yourself - and starts off.
     "routes": {
+        "mic": {"master": False, "speakers": False},
         "system": {"master": True, "speakers": True},
         "game": {"master": True, "speakers": True},
         "music": {"master": True, "speakers": True},
@@ -164,6 +167,14 @@ class ConfigRepository:
         # Inputs written before effects existed simply have none.
         for inp in config.get("inputs", []):
             inp.setdefault("effects", {})
+
+        # An input can be routed to an output to monitor it. Older configs have
+        # no entry, and a missing one must mean off rather than a crash.
+        outputs = [o["id"] for o in config.get("outputs", [])]
+        for inp in config.get("inputs", []):
+            routes = config.setdefault("routes", {}).setdefault(inp["id"], {})
+            for out_id in outputs:
+                routes.setdefault(out_id, False)
 
         for key, value in DEFAULT_CONFIG.items():
             config.setdefault(key, copy.deepcopy(value))

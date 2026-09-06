@@ -169,6 +169,8 @@ class Mixer:
         self.inputs_by_id[slug] = self.config["inputs"][-1]
         self.config["volume"][slug] = 70
         self.config["muted"][slug] = False
+        # Monitoring off: a new microphone should not start playing back at you.
+        self.config["routes"][slug] = {out_id: False for out_id in self.outputs_by_id}
         self._reprovision()
         return slug
 
@@ -181,6 +183,7 @@ class Mixer:
         self.inputs_by_id.pop(input_id, None)
         for store in ("volume", "muted"):
             self.config[store].pop(input_id, None)
+        self.config["routes"].pop(input_id, None)
         for kind in ("volume_cc", "mute_note"):
             self.config["midi"][kind].pop(input_id, None)
         self._reprovision()
@@ -201,6 +204,8 @@ class Mixer:
         self.config["output_solo"][slug] = False
         for chan in self.config["channels"]:
             self.config["routes"][chan["id"]][slug] = True
+        for inp in self.config["inputs"]:
+            self.config["routes"].setdefault(inp["id"], {})[slug] = False
 
         self._repository.save(self.config)
         self.apply_all()
@@ -568,13 +573,25 @@ class Mixer:
     def toggle_route(self, chan_id, out_id):
         self.set_route(chan_id, out_id, not self.config["routes"][chan_id][out_id])
 
+    def strip_output_ports(self, strip_id):
+        """The outward-facing ports of a strip's loopback.
+
+        A channel's loopback is a plain stream and names them output_*; an
+        input's is published as an Audio/Source and names them capture_*, so an
+        input's are resolved rather than assumed.
+        """
+        sink = self.sink_for(strip_id)
+        if strip_id in self.inputs_by_id:
+            return self._backend.node_output_ports(f"{sink}_out")
+        return f"{sink}_out:output_FL", f"{sink}_out:output_FR"
+
     def _apply_route(self, chan_id, out_id):
-        sink = self.sink_for(chan_id)
         output = self.outputs_by_id[out_id]
         enabled = self.config["routes"][chan_id][out_id]
+        source_l, source_r = self.strip_output_ports(chan_id)
         pairs = (
-            (f"{sink}_out:output_FL", output["port_l"]),
-            (f"{sink}_out:output_FR", output["port_r"]),
+            (source_l, output["port_l"]),
+            (source_r, output["port_r"]),
         )
         for source_port, dest_port in pairs:
             if enabled:
@@ -610,6 +627,9 @@ class Mixer:
                 self._backend.set_source_volume(source["name"], source.get("volume", 100))
             for chain_out, sink_in in self.effects_tail_links(inp):
                 self._backend.connect(chain_out, sink_in)
+            # Monitoring: an input routed to an output is you hearing yourself.
+            for out_id in self.outputs_by_id:
+                self._apply_route(input_id, out_id)
 
         for out_id in self.outputs_by_id:
             self._backend.set_sink_volume(
@@ -620,12 +640,12 @@ class Mixer:
     def expected_links(self):
         """Every (source_port, dest_port) the current routing implies."""
         links = set()
-        for chan in self.config["channels"]:
-            sink = chan["sink"]
+        for strip in self.config["channels"] + self.config["inputs"]:
+            source_l, source_r = self.strip_output_ports(strip["id"])
             for out_id, output in self.outputs_by_id.items():
-                if self.config["routes"][chan["id"]][out_id]:
-                    links.add((f"{sink}_out:output_FL", output["port_l"]))
-                    links.add((f"{sink}_out:output_FR", output["port_r"]))
+                if self.config["routes"].get(strip["id"], {}).get(out_id):
+                    links.add((source_l, output["port_l"]))
+                    links.add((source_r, output["port_r"]))
         for inp in self.config["inputs"]:
             dest_l, dest_r = self.input_destination(inp)
             for capture_l, capture_r in self.capture_ports_for_input(inp):

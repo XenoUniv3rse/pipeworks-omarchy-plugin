@@ -230,13 +230,23 @@ Rectangle {
     // ------------------------------------------------------------- routing
 
     ColumnLayout {
-      visible: root.isChannel && root.model.outputs.length > 0
+      // Channels list where they play; an input lists where it can be
+      // monitored, which is the same link seen from the other end.
+      visible: !root.isOutput && root.model.outputs.length > 0
       Layout.fillWidth: true
       Layout.fillHeight: false
       spacing: Style.space(3)
 
+      Text {
+        visible: root.kind === "input"
+        text: "Monitor"
+        color: Util.alpha(Color.foreground, 0.4)
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+      }
+
       Repeater {
-        model: root.isChannel ? root.model.outputs : []
+        model: !root.isOutput ? root.model.outputs : []
 
         delegate: Button {
           required property var modelData
@@ -253,8 +263,9 @@ Rectangle {
           active: on
           foreground: on ? Color.foreground : Util.alpha(Color.foreground, 0.45)
           fontFamily: Style.font.family
-          tooltipText: (on ? "Stop sending " : "Send ") + root.stripLabel
-            + (on ? " to " : " to ") + text
+          tooltipText: root.kind === "input"
+            ? (on ? "Stop hearing " : "Hear ") + root.stripLabel + " through " + text
+            : (on ? "Stop sending " : "Send ") + root.stripLabel + " to " + text
           onClicked: root.model.toggleRoute(root.stripId, modelData.id)
         }
       }
