@@ -293,9 +293,21 @@ BarWidget {
     property real level: 0
 
     readonly property int segments: 22
-    readonly property real amberFrom: 0.64   // ~-18 dB on a -50..0 scale
-    readonly property real redFrom: 0.88     // ~-6 dB
     readonly property real gap: 1
+
+    // Where the colours change, in dBFS rather than as fractions of the meter.
+    //
+    // These used to be 0.64 and 0.88 of the meter's height, which put amber at
+    // -18 dBFS - a healthy nominal level, not a warning. With loud content that
+    // lit amber at half fader and red at eighty percent, so a channel turned
+    // down to barely audible still looked like it was running hot. Amber now
+    // means "approaching clipping" and red "at it".
+    readonly property real floorDb: -50
+    readonly property real amberDb: -12
+    readonly property real redDb: -3
+
+    readonly property real amberFrom: (amberDb - floorDb) / -floorDb
+    readonly property real redFrom: (redDb - floorDb) / -floorDb
 
     // Peaks arrive faster than the eye can follow; easing the value keeps the
     // meter readable instead of strobing.
