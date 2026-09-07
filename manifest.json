@@ -21,7 +21,6 @@
     "bar-widget",
     "panel"
   ],
-  "keepLoaded": true,
   "entryPoints": {
     "service": "Service.qml",
     "barWidget": "MixerWidget.qml",

@@ -69,6 +69,11 @@ Item {
     implicitWidth: 1040
     implicitHeight: 660
     minimumSize: Qt.size(560, 520)
+    // Hidden until summoned. A FloatingWindow shows itself by default, so
+    // whenever the shell mounts this plugin early - which it does for a panel
+    // marked keepLoaded - the mixer would appear on screen at login without
+    // anyone asking for it. open() is the only thing that shows it.
+    visible: false
 
     onVisibleChanged: {
       if (!visible && !root.closingFromHost && root.shell
