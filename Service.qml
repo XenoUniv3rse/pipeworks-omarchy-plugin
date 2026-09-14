@@ -25,8 +25,17 @@ Item {
   property var shell: null
   property var manifest: null
 
-  readonly property string pluginDir: manifest && manifest.__sourceDir
-    ? String(manifest.__sourceDir) : ""
+  // Third-party manifests have __sourceDir stripped before reaching plugin
+  // code (shell.publicPluginManifest), so the source directory has to be
+  // derived from the one thing that survives - the plugin id - against the
+  // fixed, documented location every third-party plugin is installed under.
+  // __sourceDir is still preferred when present, in case a future shell
+  // version restores it or this ever runs as a first-party plugin.
+  readonly property string pluginDir: {
+    if (manifest && manifest.__sourceDir) return String(manifest.__sourceDir)
+    var id = manifest && manifest.id ? String(manifest.id) : ""
+    return id ? Quickshell.env("HOME") + "/.config/omarchy/plugins/" + id : ""
+  }
   readonly property string launcher: pluginDir ? pluginDir + "/daemon/run.py" : ""
 
   readonly property string busName: "io.github.pipeworks.Pipeworks"
