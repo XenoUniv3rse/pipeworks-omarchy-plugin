@@ -355,6 +355,22 @@ Item {
             wrapMode: Text.WordWrap
           }
         }
+
+        // The dropdown above is the last thing in this ColumnLayout, and its
+        // popup renders below the trigger inside the window's own surface -
+        // there being nothing after it here means nothing else is holding the
+        // window's bottom edge below where that popup draws, on ANY window
+        // height. This is exactly that room, sized for the popup at its
+        // internal 8-row cap so it stays enough even as more devices are
+        // plugged in.
+        Item {
+          Layout.fillWidth: true
+          Layout.preferredHeight: midiSection.midiOptions.length > 0
+            ? Style.spacing.popupRowHeight * Math.min(midiSection.midiOptions.length, 8)
+              + Style.spacing.labelGap * (Math.min(midiSection.midiOptions.length, 8) - 1)
+              + Style.space(16)
+            : 0
+        }
       }
 
       // Chips are reparented here while being dragged, so they float above
