@@ -214,7 +214,7 @@ An input's microphones: `add-input-source`, `remove-input-source`,
 one virtual sink that already exists, so adding one is only extra links and does
 not interrupt audio the way adding a whole input does.
 Effects: `set-effect-enabled`, `set-effect-control`.
-Control surface: `midi-learn`, `midi-learn-cancel`.
+Control surface: `midi-learn`, `midi-learn-cancel`, `set-midi-port`.
 Housekeeping: `set-autostart`, `set-state-watch`, `show-window`.
 
 What a front end needs to *read* rather than command does not fit an action, so
