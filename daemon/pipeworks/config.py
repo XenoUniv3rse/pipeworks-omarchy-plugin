@@ -75,6 +75,9 @@ DEFAULT_CONFIG = {
     # When true, levels answer only to the control surface: software faders are
     # shown but inert. Mute, solo and routing stay available either way.
     "volume_locked": False,
+    # Which control surface to open, as a stable (sequencer-address-stripped)
+    # ALSA port name. See midi.controller.probe_ports.
+    "midi_port_match": settings.MIDI_PORT_MATCH,
     # Physical output state, independent of any channel.
     "output_volume": {"master": 100, "speakers": 100},
     "output_muted": {"master": False, "speakers": False},

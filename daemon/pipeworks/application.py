@@ -100,6 +100,7 @@ class PipeworksApplication(Gio.Application):
             ("toggle-route", "(ss)", self._on_toggle_route),
             ("set-volume-lock", "b", self._on_set_volume_lock),
             ("toggle-volume-lock", None, self._on_toggle_volume_lock),
+            ("set-midi-port", "s", self._on_set_midi_port),
             # Application routing
             ("move-stream", "(is)", self._on_move_stream),
             # Structural edits
@@ -200,6 +201,12 @@ class PipeworksApplication(Gio.Application):
     def _on_toggle_volume_lock(self, _action, _parameter):
         mixer = self._mixer()
         mixer.set_volume_locked(not mixer.volume_locked)
+
+    def _on_set_midi_port(self, _action, parameter):
+        port_match = parameter.unpack()
+        if port_match:
+            self._service.set_midi_port(port_match)
+            self._republish()
 
     # ------------------------------------------------------------------
     # Application routing

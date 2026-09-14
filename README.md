@@ -102,6 +102,14 @@ Drag a chip onto another channel to move that application there. New
 applications appear in whichever channel is your default sink, so routing one is
 a drag rather than a trip through pavucontrol.
 
+## Selecting a control surface
+
+If more than one MIDI device is plugged in, or the wrong one gets picked by
+default, choose the right one from **Control surface** at the bottom of the
+mixer window. It lists every board ALSA currently sees; picking one switches
+to it immediately, with no restart needed. If your board is not listed, plug
+it in and it will appear the next time the window polls (a couple of seconds).
+
 ## MIDI-only volume
 
 If you would rather levels answered only to the control surface, turn on

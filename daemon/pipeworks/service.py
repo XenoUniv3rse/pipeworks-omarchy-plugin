@@ -77,14 +77,40 @@ class MixerService:
 
     # ------------------------------------------------------------------
 
-    def _open_control_surface(self):
+    def _open_control_surface(self, port_match=None):
+        if port_match is None:
+            port_match = self.config.get("midi_port_match", settings.MIDI_PORT_MATCH)
         try:
-            midi = MidiController(self.mixer, self.bindings, dispatch=_glib_dispatch)
+            midi = MidiController(
+                self.mixer, self.bindings, dispatch=_glib_dispatch, port_match=port_match
+            )
         except MidiPortsNotFound as error:
             # Still fully usable by mouse; the board may just be unplugged.
             print(f"pipeworks: {error}; continuing without control surface", file=sys.stderr)
             return NullMidiController()
         return midi
+
+    def set_midi_port(self, port_match):
+        """Switches to a different control surface.
+
+        The board just picked may not currently be plugged in - the same as at
+        startup, that falls back to NullMidiController rather than raising, so
+        a stale or wrong choice leaves the mixer usable by mouse instead of
+        breaking the daemon.
+        """
+        self.config["midi_port_match"] = port_match
+        self.repository.save(self.config)
+
+        self.midi.close()
+        self.midi = self._open_control_surface(port_match)
+        self.mixer.on_led = self.midi.reflect_change
+        self.midi.on_learned = self._on_learned
+        self.midi.sync_leds()
+        self.state.set_midi(self.midi)
+        self._report(
+            f"Connected to {port_match}" if self.midi.connected
+            else f"{port_match} not found; still usable by mouse"
+        )
 
     def start(self):
         """Brings the graph up to match saved state and starts watching it."""

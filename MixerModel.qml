@@ -60,6 +60,11 @@ QtObject {
   readonly property var autostart: state.autostart || ({})
   readonly property var learn: state.learn || ({})
   readonly property bool midiConnected: state.midiConnected === true
+  // The control surface currently selected, and every candidate ALSA reports
+  // right now - refreshed each time the daemon publishes state, so a board
+  // plugged or unplugged while this is open shows up without reopening.
+  readonly property string midiPortMatch: String(state.midiPortMatch || "")
+  readonly property var midiPorts: state.midiPorts instanceof Array ? state.midiPorts : []
   readonly property string status: String(state.status || "")
   readonly property int statusSerial: Number(state.statusSerial || 0)
 
@@ -408,6 +413,10 @@ QtObject {
 
   function setAutostart(enabled) {
     root.activate("set-autostart", "[<" + (enabled ? "true" : "false") + ">]")
+  }
+
+  function setMidiPort(portMatch) {
+    root.activate("set-midi-port", "[<" + root.quoted(portMatch) + ">]")
   }
 
   // ------------------------------------------------------- state watching

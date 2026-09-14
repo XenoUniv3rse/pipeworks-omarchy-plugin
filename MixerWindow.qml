@@ -270,6 +270,91 @@ Item {
           fontFamily: Style.font.family
           onClicked: if (enabled) mixer.setAutostart(!checked)
         }
+
+        ColumnLayout {
+          id: midiSection
+          Layout.fillWidth: true
+          Layout.margins: Style.space(12)
+          spacing: Style.space(4)
+
+          // The stored match is a substring, matched the same way the daemon
+          // matches it (containment, not equality) - a legacy short match like
+          // "SMC-Mixer-Private" is genuinely connected even though it is not
+          // equal to the full name "SINCO:SINCO SMC-Mixer-Private" that
+          // probing reports. Resolving it to that full name here is what lets
+          // the dropdown highlight the right row instead of showing nothing
+          // selected on an already-working setup.
+          readonly property string resolvedPort: {
+            for (var i = 0; i < mixer.midiPorts.length; i++) {
+              if (mixer.midiPortMatch !== ""
+                  && mixer.midiPorts[i].indexOf(mixer.midiPortMatch) !== -1)
+                return mixer.midiPorts[i]
+            }
+            return mixer.midiPortMatch
+          }
+
+          // Every board ALSA can currently see, plus whatever is configured
+          // even if it is not detected right now - unplugged rather than
+          // unconfigured are different situations and both deserve to be
+          // visible instead of one silently swallowing the other.
+          readonly property var midiOptions: {
+            var options = []
+            for (var i = 0; i < mixer.midiPorts.length; i++)
+              options.push({ value: mixer.midiPorts[i], label: mixer.midiPorts[i] })
+            if (mixer.midiPortMatch !== "" && mixer.midiPorts.indexOf(midiSection.resolvedPort) === -1) {
+              options.push({
+                value: mixer.midiPortMatch,
+                label: mixer.midiPortMatch + " (not detected)"
+              })
+            }
+            return options
+          }
+
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(6)
+
+            Text {
+              text: "Control surface"
+              color: Color.foreground
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+            }
+
+            // The theme has no "good" token, only foreground/accent/urgent/muted -
+            // this reuses the meter's own green so connected doesn't invent a
+            // colour found nowhere else in the plugin.
+            Rectangle {
+              width: Style.space(6)
+              height: Style.space(6)
+              radius: width / 2
+              color: mixer.midiConnected ? Qt.rgba(0.35, 0.80, 0.40, 1) : Color.urgent
+            }
+          }
+
+          Dropdown {
+            visible: midiSection.midiOptions.length > 0
+            Layout.fillWidth: true
+            showLabel: false
+            options: midiSection.midiOptions
+            value: midiSection.resolvedPort
+            fontFamily: Style.font.family
+            // Selecting a listed device stores its full name, replacing
+            // whatever match was configured before - so picking a device once
+            // is also how an old short match upgrades to an exact one.
+            onChanged: function (value) { mixer.setMidiPort(value) }
+          }
+
+          Text {
+            visible: midiSection.midiOptions.length === 0
+            Layout.fillWidth: true
+            text: "No MIDI device detected. Plug in your board to select it."
+            color: Color.urgent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+        }
       }
 
       // Chips are reparented here while being dragged, so they float above

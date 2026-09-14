@@ -4,6 +4,8 @@ Translates MIDI messages into mixer commands and mixer state back into LED
 states. Incoming messages arrive on rtmidi's own thread, so they are handed to
 the injected dispatcher before touching anything else.
 """
+import re
+
 import rtmidi
 
 from .. import settings
@@ -12,9 +14,37 @@ NOTE_ON = 0x90
 CONTROL_CHANGE = 0xB0
 LED_ON_VELOCITY = 127
 
+# ALSA names a sequencer port "<client>:<port> <client-id>:<port-id>" - the
+# trailing pair is an address, not identity, and is not guaranteed to stay the
+# same across a reboot or a reconnect once other MIDI clients are in the mix.
+_ADDRESS_SUFFIX = re.compile(r"\s+\d+:\d+$")
+
+# ALSA's own virtual passthrough client, present on every system with a
+# sequencer and never a real controller - excluded so it does not clutter a
+# device picker.
+_IGNORED_CLIENT_PREFIX = "Midi Through:"
+
 
 class MidiPortsNotFound(RuntimeError):
     pass
+
+
+def probe_ports():
+    """Lists control-surface candidates currently visible to ALSA.
+
+    Each name has its sequencer address stripped, matching what MidiController
+    itself searches for - so a name from this list is always a match that will
+    resolve, whichever slot ALSA happens to assign the device to next time.
+    """
+    probe = rtmidi.MidiIn(rtmidi.API_LINUX_ALSA)
+    seen = []
+    for name in probe.get_ports():
+        if name.startswith(_IGNORED_CLIENT_PREFIX):
+            continue
+        stable = _ADDRESS_SUFFIX.sub("", name).strip()
+        if stable and stable not in seen:
+            seen.append(stable)
+    return seen
 
 
 class MidiController:
@@ -41,6 +71,13 @@ class MidiController:
     @staticmethod
     def _find_port(port, match):
         return next((i for i, name in enumerate(port.get_ports()) if match in name), None)
+
+    def close(self):
+        """Releases the ALSA ports, so a new controller can open the same or a
+        different device without them still being held open."""
+        self._midi_in.cancel_callback()
+        self._midi_in.close_port()
+        self._midi_out.close_port()
 
     # ------------------------------------------------------------------
     # Learn
@@ -162,4 +199,7 @@ class NullMidiController:
         pass
 
     def reflect_change(self, change_kind, key, value):
+        pass
+
+    def close(self):
         pass

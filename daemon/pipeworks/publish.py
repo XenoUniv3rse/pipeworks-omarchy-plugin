@@ -18,6 +18,7 @@ import tempfile
 
 from . import settings
 from .audio import effects as effects_module
+from .midi.controller import probe_ports
 
 
 class StatePublisher:
@@ -28,11 +29,20 @@ class StatePublisher:
         self._autostart = autostart
         self._mixer = mixer
         self._path = path
+        self._midi_ports = []
         self._last = None
         self._status = ""
         self._status_serial = 0
 
     # ------------------------------------------------------------------
+
+    def set_midi(self, midi):
+        """Points at the controller a reconnect just created.
+
+        The old one already had close() called on it by the caller; this just
+        stops publish() from describing a controller that is no longer live.
+        """
+        self._midi = midi
 
     def set_status(self, message):
         """Records a transient message for the window to surface.
@@ -73,6 +83,12 @@ class StatePublisher:
                 "key": learning[1] if learning else "",
             },
             "midiConnected": getattr(self._midi, "connected", False),
+            "midiPortMatch": self._mixer.config.get("midi_port_match", ""),
+            # Rescanned on every publish, which only happens while some window
+            # is actually watching - so this costs nothing while idle, and stays
+            # current if a board is plugged or unplugged while the picker is
+            # open.
+            "midiPorts": probe_ports(),
             # What effects exist and the range of every control. Published
             # rather than hardcoded in the window, so the two cannot disagree
             # about what a slider means.
