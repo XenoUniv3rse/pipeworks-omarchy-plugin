@@ -14,15 +14,23 @@ NOTE_ON = 0x90
 CONTROL_CHANGE = 0xB0
 LED_ON_VELOCITY = 127
 
+# This process's own ALSA client name. Sequencer ports rtmidi opens are
+# otherwise registered under the generic "RtMidiIn Client"/"RtMidiOut Client"
+# names, which give probe_ports() nothing distinctive to exclude them by.
+CLIENT_NAME = "Pipeworks"
+
 # ALSA names a sequencer port "<client>:<port> <client-id>:<port-id>" - the
 # trailing pair is an address, not identity, and is not guaranteed to stay the
 # same across a reboot or a reconnect once other MIDI clients are in the mix.
 _ADDRESS_SUFFIX = re.compile(r"\s+\d+:\d+$")
 
-# ALSA's own virtual passthrough client, present on every system with a
-# sequencer and never a real controller - excluded so it does not clutter a
-# device picker.
-_IGNORED_CLIENT_PREFIX = "Midi Through:"
+# Clients that are never a real controller, excluded so they do not clutter a
+# device picker: ALSA's own virtual passthrough, present on every system with
+# a sequencer, and this process's own MIDI ports - without the second one,
+# the daemon's own LED-output port shows up as if it were a pluggable board,
+# since ALSA advertises it with both read and write capability regardless of
+# which direction this process actually uses it for.
+_IGNORED_CLIENT_PREFIXES = ("Midi Through:", CLIENT_NAME + ":")
 
 
 class MidiPortsNotFound(RuntimeError):
@@ -39,7 +47,7 @@ def probe_ports():
     probe = rtmidi.MidiIn(rtmidi.API_LINUX_ALSA)
     seen = []
     for name in probe.get_ports():
-        if name.startswith(_IGNORED_CLIENT_PREFIX):
+        if name.startswith(_IGNORED_CLIENT_PREFIXES):
             continue
         stable = _ADDRESS_SUFFIX.sub("", name).strip()
         if stable and stable not in seen:
@@ -58,6 +66,8 @@ class MidiController:
 
         self._midi_in = rtmidi.MidiIn(rtmidi.API_LINUX_ALSA)
         self._midi_out = rtmidi.MidiOut(rtmidi.API_LINUX_ALSA)
+        self._midi_in.set_client_name(CLIENT_NAME)
+        self._midi_out.set_client_name(CLIENT_NAME)
         in_index = self._find_port(self._midi_in, port_match)
         out_index = self._find_port(self._midi_out, port_match)
         if in_index is None or out_index is None:
