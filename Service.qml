@@ -38,6 +38,19 @@ Item {
   }
   readonly property string launcher: pluginDir ? pluginDir + "/daemon/run.py" : ""
 
+  // Python writes bytecode beside the source it imports, and this plugin's
+  // daemon is a package tree living under ~/.config/omarchy/plugins, which
+  // omarchy-shell watches recursively to hot-reload plugin code. A cold cache
+  // therefore makes our own import look like somebody editing the plugin, and
+  // the shell tears down and rebuilds every panel - wallpaper included - on top
+  // of a daemon that was only starting up. The cache is worth keeping, so
+  // relocate it rather than switching it off.
+  readonly property string pycachePrefix: {
+    var cache = Quickshell.env("XDG_CACHE_HOME")
+    if (!cache) cache = Quickshell.env("HOME") + "/.cache"
+    return cache + "/pipeworks/pycache"
+  }
+
   readonly property string busName: "io.github.pipeworks.Pipeworks"
   readonly property string busPath: "/io/github/pipeworks/Pipeworks"
 
@@ -131,7 +144,7 @@ Item {
 
   function startDaemon() {
     if (launcher === "" || daemon.running) return
-    daemon.command = ["python3", root.launcher, "--daemon"]
+    daemon.command = ["python3", "-X", "pycache_prefix=" + root.pycachePrefix, root.launcher, "--daemon"]
     daemon.running = true
   }
 
