@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import Quickshell.Services.Pipewire
 import qs.Commons
 import qs.Ui
+import Quickshell.Io
 
 // Bar widget for the Pipeworks virtual audio mixer: a fader panel under the
 // bar icon, for the everyday reach for a level without opening the window.
@@ -116,6 +117,86 @@ BarWidget {
     return false
   }
 
+  // ---------------------------------------------------------- wheel
+
+  // The strip the mouse wheel turns: the one named in the bar setting (by id
+  // or on-screen name), or the first output, which is usually what "the
+  // volume" means.
+  readonly property var scrollTarget: {
+    var wanted = String(root.setting("scrollStrip", "")).trim().toLowerCase()
+    var groups = [
+      { list: mixer.outputs, output: true },
+      { list: mixer.channels, output: false },
+      { list: mixer.inputs, output: false }
+    ]
+    if (wanted !== "") {
+      for (var g = 0; g < groups.length; g++)
+        for (var i = 0; i < groups[g].list.length; i++) {
+          var strip = groups[g].list[i]
+          if (String(strip.id).toLowerCase() === wanted
+              || String(strip.label || "").toLowerCase() === wanted)
+            return { id: String(strip.id), label: String(strip.label || strip.id), output: groups[g].output }
+        }
+    }
+    if (mixer.outputs.length > 0)
+      return { id: String(mixer.outputs[0].id), label: String(mixer.outputs[0].label || mixer.outputs[0].id), output: true }
+    return null
+  }
+
+  property real wheelAccumulator: 0
+  // The level the wheel last asked for. The daemon's echo arrives a beat
+  // later, so stepping from the echo would lose notches on a quick scroll.
+  property real scrollLevel: -1
+
+  Timer {
+    id: scrollSettle
+    interval: 600
+    onTriggered: root.scrollLevel = -1
+  }
+
+  // The shell's own OSD. A third-party plugin may not summon another plugin
+  // directly - the sandbox refuses it - but the IPC command line is open to
+  // anyone, so it goes through that. One call at a time, newest wins: a fast
+  // scroll would otherwise queue up a trail of stale OSDs.
+  property string osdPending: ""
+
+  Process {
+    id: osdProcess
+    onRunningChanged: if (!running) root.flushOsd()
+  }
+
+  function showOsd(payload) {
+    root.osdPending = JSON.stringify(payload)
+    root.flushOsd()
+  }
+
+  function flushOsd() {
+    if (osdProcess.running || root.osdPending === "") return
+    osdProcess.command = ["omarchy-shell", "-q", "shell", "summon", "omarchy.osd", root.osdPending]
+    root.osdPending = ""
+    osdProcess.running = true
+  }
+
+  function scrollBy(delta) {
+    var target = root.scrollTarget
+    if (!mixer.available || !target) return
+    var wheel = Util.wheelSteps(root.wheelAccumulator, delta)
+    root.wheelAccumulator = wheel.remainder
+    if (wheel.steps === 0) return
+    if (mixer.volumeLocked) {
+      root.showOsd({ icon: "volume", message: "MIDI-only volume" })
+      return
+    }
+    var store = target.output ? mixer.outputVolumes : mixer.volumes
+    var current = root.scrollLevel >= 0 ? root.scrollLevel : Number(store[target.id] || 0)
+    var next = Math.max(0, Math.min(100, Math.round(current + wheel.steps * 5)))
+    root.scrollLevel = next
+    scrollSettle.restart()
+    mixer.queueVolume(target.id, next, target.output)
+    root.showOsd({ icon: next <= 0 ? "volume-muted" : "volume", value: next,
+                   progressText: target.label + "  " + next + "%" })
+  }
+
   readonly property bool opened: popupOpen
   function open() { root.popupOpen = true }
   function close() { root.popupOpen = false }
@@ -143,11 +224,13 @@ BarWidget {
     dimmed: !mixer.available
     tooltipText: mixer.available
       ? "Pipeworks mixer" + (root.anyMuted ? "  ·  something is muted" : "")
+        + (root.scrollTarget ? "\nScroll: " + root.scrollTarget.label + " volume" : "")
       : "Pipeworks is not running"
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.MiddleButton) root.openWindow()
       else root.popupOpen = !root.popupOpen
     }
+    onWheelMoved: function(delta) { root.scrollBy(delta) }
   }
 
   // --------------------------------------------------------------- popup
@@ -249,6 +332,32 @@ BarWidget {
           PanelSeparator {
             visible: mixer.available
             Layout.fillWidth: true
+          }
+
+          // Scenes, for recalling a whole mix from the bar. The one the live
+          // mix matches is lit.
+          Flow {
+            visible: mixer.available && mixer.scenes.length > 0
+            Layout.fillWidth: true
+            spacing: Style.space(4)
+
+            Repeater {
+              model: mixer.available ? mixer.scenes : []
+              delegate: Button {
+                required property var modelData
+                readonly property bool current: mixer.sceneMatches(modelData)
+                text: String(modelData.label || modelData.id)
+                fontSize: Style.font.caption
+                horizontalPadding: Style.space(6)
+                verticalPadding: Style.space(2)
+                bordered: true
+                active: current
+                foreground: current ? root.foreground : root.dim
+                fontFamily: root.fontFamily
+                tooltipText: "Recall " + text
+                onClicked: mixer.recallScene(modelData.id)
+              }
+            }
           }
 
           Button {

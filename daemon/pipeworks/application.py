@@ -101,8 +101,18 @@ class PipeworksApplication(Gio.Application):
             ("set-volume-lock", "b", self._on_set_volume_lock),
             ("toggle-volume-lock", None, self._on_toggle_volume_lock),
             ("set-midi-port", "s", self._on_set_midi_port),
+            ("set-soft-takeover", "b", self._on_set_soft_takeover),
+            ("set-midi-osd", "b", self._on_set_midi_osd),
+            ("set-duck", "(ssd)", self._on_set_duck),
+            # Scenes
+            ("save-scene", "s", self._on_save_scene),
+            ("update-scene", "s", self._on_update_scene),
+            ("rename-scene", "(ss)", self._on_rename_scene),
+            ("remove-scene", "s", self._on_remove_scene),
+            ("recall-scene", "s", self._on_recall_scene),
             # Application routing
             ("move-stream", "(is)", self._on_move_stream),
+            ("set-default-channel", "s", self._on_set_default_channel),
             # Structural edits
             ("add-channel", "s", self._on_add_channel),
             ("add-input", "(ss)", self._on_add_input),
@@ -121,6 +131,7 @@ class PipeworksApplication(Gio.Application):
             # Control surface
             ("midi-learn", "(ss)", self._on_midi_learn),
             ("midi-learn-cancel", None, self._on_midi_learn_cancel),
+            ("midi-unbind", "(ss)", self._on_midi_unbind),
             # Housekeeping
             ("set-autostart", "b", self._on_set_autostart),
             ("set-state-watch", "b", self._on_set_state_watch),
@@ -202,11 +213,45 @@ class PipeworksApplication(Gio.Application):
         mixer = self._mixer()
         mixer.set_volume_locked(not mixer.volume_locked)
 
+    def _on_set_duck(self, _action, parameter):
+        chan_id, trigger, amount = parameter.unpack()
+        if self._entity("channel", chan_id):
+            self._mixer().set_duck(chan_id, trigger, amount)
+            self._republish()
+
+    def _on_set_midi_osd(self, _action, parameter):
+        self._mixer().set_midi_osd(parameter.unpack())
+
+    def _on_set_soft_takeover(self, _action, parameter):
+        self._mixer().set_soft_takeover(parameter.unpack())
+
     def _on_set_midi_port(self, _action, parameter):
         port_match = parameter.unpack()
         if port_match:
             self._service.set_midi_port(port_match)
             self._republish()
+
+    # ------------------------------------------------------------------
+    # Scenes
+
+    def _on_save_scene(self, _action, parameter):
+        label = parameter.unpack().strip()
+        if label:
+            self._mixer().save_scene(label)
+
+    def _on_update_scene(self, _action, parameter):
+        self._mixer().update_scene(parameter.unpack())
+
+    def _on_rename_scene(self, _action, parameter):
+        scene_id, label = parameter.unpack()
+        if label.strip():
+            self._mixer().rename_scene(scene_id, label.strip())
+
+    def _on_remove_scene(self, _action, parameter):
+        self._mixer().remove_scene(parameter.unpack())
+
+    def _on_recall_scene(self, _action, parameter):
+        self._mixer().recall_scene(parameter.unpack())
 
     # ------------------------------------------------------------------
     # Application routing
@@ -215,6 +260,17 @@ class PipeworksApplication(Gio.Application):
         stream_index, sink_name = parameter.unpack()
         self._service.streams.move(stream_index, sink_name)
         self._republish()
+
+    def _on_set_default_channel(self, _action, parameter):
+        """Makes new applications play into a channel.
+
+        Only channels are accepted: pointing the default at a hardware device
+        from here would send every new app straight past the mixer.
+        """
+        channel = self._entity("channel", parameter.unpack())
+        if channel:
+            self._service.devices.set_default_sink(channel["sink"])
+            self._republish()
 
     # ------------------------------------------------------------------
     # Structural edits
@@ -304,13 +360,13 @@ class PipeworksApplication(Gio.Application):
 
     def _on_set_effect_enabled(self, _action, parameter):
         strip_id, effect_id, enabled = parameter.unpack()
-        if self._entity("input", strip_id):
+        if self._entity("input", strip_id) or self._entity("output", strip_id):
             self._mixer().set_effect_enabled(strip_id, effect_id, enabled)
             self._republish()
 
     def _on_set_effect_control(self, _action, parameter):
         strip_id, effect_id, control_id, value = parameter.unpack()
-        if self._entity("input", strip_id):
+        if self._entity("input", strip_id) or self._entity("output", strip_id):
             self._mixer().set_effect_control(strip_id, effect_id, control_id, value)
 
     # ------------------------------------------------------------------
@@ -324,6 +380,10 @@ class PipeworksApplication(Gio.Application):
     def _on_midi_learn_cancel(self, _action, _parameter):
         self._service.midi.cancel_learn()
         self._republish()
+
+    def _on_midi_unbind(self, _action, parameter):
+        kind, key = parameter.unpack()
+        self._service.unbind(kind, key)
 
     # ------------------------------------------------------------------
     # Housekeeping

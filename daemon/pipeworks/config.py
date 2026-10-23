@@ -78,10 +78,19 @@ DEFAULT_CONFIG = {
     # Which control surface to open, as a stable (sequencer-address-stripped)
     # ALSA port name. See midi.controller.probe_ports.
     "midi_port_match": settings.MIDI_PORT_MATCH,
+    # Soft takeover ("pickup"): a physical fader that no longer matches the
+    # level - because the window or a scene changed it - is ignored until it
+    # is brought back to that level, instead of making the level jump.
+    "midi_soft_takeover": True,
+    # Show what the control surface just changed on the shell's OSD.
+    "midi_osd": True,
     # Physical output state, independent of any channel.
     "output_volume": {"master": 100, "speakers": 100},
     "output_muted": {"master": False, "speakers": False},
     "output_solo": {"master": False, "speakers": False},
+    # Saved mixes: levels, mutes, solos and routing, recalled in one go. Each is
+    # {"id", "label"} plus one entry per store in audio.mixer.SCENE_STORES.
+    "scenes": [],
     # Control-surface bindings.
     "midi": {
         "volume_cc": {"system": 41, "game": 42, "music": 43, "browser": 44, "chat": 45, "mic": 40},
@@ -91,6 +100,7 @@ DEFAULT_CONFIG = {
         "output_volume_cc": {},  # keys are output ids
         "output_mute_note": {},
         "output_solo_note": {},
+        "scene_note": {},  # keys are scene ids
     },
 }
 
@@ -167,9 +177,10 @@ class ConfigRepository:
                     source[key] = inp.pop(key)
             inp["sources"] = [source] if source["name"] else []
 
-        # Inputs written before effects existed simply have none.
-        for inp in config.get("inputs", []):
-            inp.setdefault("effects", {})
+        # Inputs written before effects existed simply have none, and outputs
+        # had none until they could carry them too.
+        for strip in config.get("inputs", []) + config.get("outputs", []):
+            strip.setdefault("effects", {})
 
         # An input can be routed to an output to monitor it. Older configs have
         # no entry, and a missing one must mean off rather than a crash.

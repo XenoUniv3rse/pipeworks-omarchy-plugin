@@ -17,10 +17,18 @@ amplitude and nobody thinks in those.
 
 # Order is the signal chain, not a preference: suppression before the gate so it
 # is not gating noise, the gate before the compressor so the compressor is not
-# lifting the noise floor, tone last.
+# lifting the noise floor, tone after that, and the limiter at the very end where
+# it can catch everything before the speakers.
+#
+# "kinds" is which strips can carry an effect. A microphone wants noise
+# suppression and a gate; an output - everything you hear through one device -
+# wants tone, a compressor for listening quietly, and a limiter, and has no use
+# for a gate or a reverb. "output" holds the wording that changes when the same
+# effect sits on an output rather than a microphone.
 EFFECTS = [
     {
         "id": "noise",
+        "kinds": ["input"],
         "label": "Noise suppression",
         "description": "Removes steady background noise - fans, hiss, traffic - "
                        "while leaving speech alone.",
@@ -52,6 +60,8 @@ EFFECTS = [
     },
     {
         "id": "highpass",
+        "kinds": ["input", "output"],
+        "output": {"description": "Cuts rumble below what the speakers can reproduce cleanly.", "help": {"freq": "Everything below this is removed. 40-80 Hz protects small speakers."}},
         "label": "High-pass",
         "description": "Cuts rumble, desk knocks and breath below the voice.",
         "nodes": [
@@ -80,6 +90,7 @@ EFFECTS = [
     },
     {
         "id": "gate",
+        "kinds": ["input"],
         "label": "Gate",
         "description": "Silences the microphone when you are not talking.",
         "nodes": [
@@ -121,6 +132,8 @@ EFFECTS = [
     },
     {
         "id": "compressor",
+        "kinds": ["input", "output"],
+        "output": {"description": "Evens out loud and quiet moments, for listening late at night.", "help": {"threshold": "Sound above this gets turned down."}},
         "label": "Compressor",
         "description": "Evens out loud and quiet speech so your level stays steady.",
         "nodes": [
@@ -185,6 +198,7 @@ EFFECTS = [
     },
     {
         "id": "eq",
+        "kinds": ["input", "output"],
         "label": "Tone",
         "description": "Three bands of shelving and mid lift or cut.",
         # One biquad per band, chained inside the effect.
@@ -256,6 +270,7 @@ EFFECTS = [
     },
     {
         "id": "reverb",
+        "kinds": ["input"],
         "label": "Reverb",
         "description": "Adds the sound of a space around your voice.",
         # Steve Harris's plate reverb is one audio input and two outputs, and
@@ -329,7 +344,60 @@ EFFECTS = [
     },
 ]
 
+EFFECTS.append({
+    "id": "limiter",
+    "kinds": ["output"],
+    "label": "Limiter",
+    "description": "A ceiling nothing gets past - protects ears and speakers "
+                   "from a sudden loud sound.",
+    "nodes": [
+        {
+            "name": "limiter",
+            "type": "lv2",
+            "plugin": "http://lsp-plug.in/plugins/lv2/limiter_mono",
+            "in_port": "in",
+            "out_port": "out",
+            # Without this the plugin lifts everything by the distance from the
+            # threshold to full scale, which makes it a loudness maximiser
+            # rather than a safety ceiling.
+            "control": {"boost": 0.0},
+        }
+    ],
+    "controls": [
+        {
+            "id": "threshold",
+            "label": "Ceiling",
+            "help": "The loudest anything is allowed to get.",
+            "node": "limiter",
+            "port": "th",
+            "unit": "dB",
+            "minimum": -24.0,
+            "maximum": 0.0,
+            "default": -1.0,
+            "scale": "db",
+        },
+        {
+            "id": "release",
+            "label": "Release",
+            "help": "How quickly it lets go after a peak.",
+            "node": "limiter",
+            "port": "rt",
+            "unit": "ms",
+            "minimum": 0.25,
+            "maximum": 20.0,
+            "default": 5.0,
+            "scale": "direct",
+        },
+    ],
+})
+
 EFFECTS_BY_ID = {effect["id"]: effect for effect in EFFECTS}
+
+
+def applies_to(effect_id, kind):
+    """Whether a strip of this kind ("input" or "output") can carry an effect."""
+    effect = EFFECTS_BY_ID.get(effect_id)
+    return bool(effect) and kind in effect.get("kinds", ("input",))
 
 
 def control_spec(effect_id, control_id):
@@ -366,13 +434,18 @@ def port_name(spec):
     return f"{spec['node']}:{spec['port']}"
 
 
-def enabled_effects(strip_effects):
-    """The effect ids that are switched on, in signal-chain order."""
+def enabled_effects(strip_effects, kind="input"):
+    """The effect ids that are switched on, in signal-chain order.
+
+    Only those a strip of this kind can carry, so an effect stored on the
+    wrong kind of strip (a hand-edited config) is never built.
+    """
     strip_effects = strip_effects or {}
     return [
         effect["id"]
         for effect in EFFECTS
-        if (strip_effects.get(effect["id"]) or {}).get("enabled")
+        if kind in effect.get("kinds", ("input",))
+        and (strip_effects.get(effect["id"]) or {}).get("enabled")
     ]
 
 
@@ -385,7 +458,7 @@ def control_value(strip_effects, effect_id, control_id):
     return spec["default"] if spec else 0.0
 
 
-def build_graph(strip_effects):
+def build_graph(strip_effects, kind="input"):
     """The filter.graph nodes and links for one strip's enabled effects.
 
     Returns (nodes, links), links being (source, source_port, dest, dest_port).
@@ -395,7 +468,7 @@ def build_graph(strip_effects):
     wrong. Empty when nothing is enabled, which is the caller's cue to run no
     filter chain at all rather than an empty one.
     """
-    active = enabled_effects(strip_effects)
+    active = enabled_effects(strip_effects, kind)
     nodes = []
     links = []
     previous_tail = None
@@ -446,17 +519,23 @@ def build_graph(strip_effects):
 
 def catalogue():
     """The effect list as a front end needs it: no graph detail, just what to
-    show and the range of every control."""
-    return [
-        {
+    show and the range of every control, with the wording for an output
+    alongside where it differs."""
+    def entry(effect):
+        output = effect.get("output") or {}
+        output_help = output.get("help") or {}
+        return {
             "id": effect["id"],
+            "kinds": list(effect.get("kinds", ("input",))),
             "label": effect["label"],
             "description": effect["description"],
+            "outputDescription": output.get("description", effect["description"]),
             "controls": [
                 {
                     "id": c["id"],
                     "label": c["label"],
                     "help": c["help"],
+                    "outputHelp": output_help.get(c["id"], c["help"]),
                     "unit": c["unit"],
                     "minimum": c["minimum"],
                     "maximum": c["maximum"],
@@ -465,5 +544,4 @@ def catalogue():
                 for c in effect["controls"]
             ],
         }
-        for effect in EFFECTS
-    ]
+    return [entry(effect) for effect in EFFECTS]

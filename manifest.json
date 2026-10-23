@@ -33,7 +33,8 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "mutedIndicatorIgnore": ""
+      "mutedIndicatorIgnore": "",
+      "scrollStrip": ""
     },
     "schema": [
       {
@@ -42,6 +43,13 @@
         "label": "Ignore these strips in the mute indicator",
         "defaultValue": "",
         "description": "Comma-separated strip names or ids whose mute state should not light the bar icon. Useful for an output you normally leave muted, which would otherwise keep the icon lit permanently."
+      },
+      {
+        "key": "scrollStrip",
+        "type": "string",
+        "label": "Strip the mouse wheel adjusts",
+        "defaultValue": "",
+        "description": "Name or id of the strip that scrolling on the bar icon turns up and down. Empty means the first output."
       }
     ]
   }

@@ -48,6 +48,10 @@ QtObject {
   readonly property var outputSolos: config.output_solo || ({})
   readonly property var midiBindings: config.midi || ({})
   readonly property bool volumeLocked: config.volume_locked === true
+  readonly property var scenes: config.scenes instanceof Array ? config.scenes : []
+  // On unless explicitly switched off, matching the daemon's default.
+  readonly property bool softTakeover: config.midi_soft_takeover !== false
+  readonly property bool midiOsd: config.midi_osd !== false
 
   readonly property var streams: state.streams instanceof Array ? state.streams : []
   readonly property var outputDevices: state.devices && state.devices.outputs instanceof Array
@@ -57,6 +61,7 @@ QtObject {
   // What effects exist and what each control means. Published by the daemon so
   // there is one description of them, not one here and one there.
   readonly property var effectsCatalogue: state.effects instanceof Array ? state.effects : []
+  readonly property string defaultSink: String(state.defaultSink || "")
   readonly property var autostart: state.autostart || ({})
   readonly property var learn: state.learn || ({})
   readonly property bool midiConnected: state.midiConnected === true
@@ -65,6 +70,9 @@ QtObject {
   // plugged or unplugged while this is open shows up without reopening.
   readonly property string midiPortMatch: String(state.midiPortMatch || "")
   readonly property var midiPorts: state.midiPorts instanceof Array ? state.midiPorts : []
+  // Channels lowered for their trigger right now. Only refreshed while a window
+  // is watching, which is the only place it is shown.
+  readonly property var ducked: state.ducked instanceof Array ? state.ducked : []
   readonly property string status: String(state.status || "")
   readonly property int statusSerial: Number(state.statusSerial || 0)
 
@@ -158,8 +166,19 @@ QtObject {
   // Read live from config for the same reason microphone levels are: a dialog
   // open on a strip must show what is actually set, not what was set when it
   // opened.
+  // The effects a kind of strip can carry ("input" or "output").
+  function effectsFor(kind) {
+    var out = []
+    for (var i = 0; i < root.effectsCatalogue.length; i++) {
+      var kinds = root.effectsCatalogue[i].kinds || ["input"]
+      if (kinds.indexOf(kind) !== -1) out.push(root.effectsCatalogue[i])
+    }
+    return out
+  }
+
+  // Inputs and outputs both carry effects; strip ids are unique across kinds.
   function effectState(inputId, effectId) {
-    var entity = root.entityFor("input", inputId)
+    var entity = root.entityFor("input", inputId) || root.entityFor("output", inputId)
     var all = (entity && entity.effects) || ({})
     return all[effectId] || ({})
   }
@@ -358,6 +377,10 @@ QtObject {
     root.activate("set-volume-lock", "[<" + (locked ? "true" : "false") + ">]")
   }
 
+  function setDefaultChannel(id) {
+    root.activate("set-default-channel", "[<" + root.quoted(id) + ">]")
+  }
+
   function moveStream(index, sinkName) {
     root.activate("move-stream", "[<(" + Math.round(index) + ", " + root.quoted(sinkName) + ")>]")
   }
@@ -411,8 +434,168 @@ QtObject {
 
   function midiLearnCancel() { root.activate("midi-learn-cancel", "[]") }
 
+  // What a binding drives, named the way the settings dialog names it:
+  // "Game · Mute", "Game · Route to Desk".
+  readonly property var bindingCaptions: ({
+    volume_cc: "Volume", mute_note: "Mute", solo_note: "Solo",
+    output_volume_cc: "Volume", output_mute_note: "Mute", output_solo_note: "Solo"
+  })
+
+  function stripLabel(kind, stripId) {
+    var kinds = kind === "output" ? ["output"] : ["channel", "input"]
+    for (var i = 0; i < kinds.length; i++) {
+      var entity = root.entityFor(kinds[i], stripId)
+      if (entity) return String(entity.label || stripId)
+    }
+    return String(stripId)
+  }
+
+  function describeBinding(kind, key) {
+    if (kind === "scene_note") {
+      var scene = root.sceneFor(key)
+      return "Scene " + (scene ? String(scene.label || key) : key) + " · Recall"
+    }
+    if (kind === "route_note") {
+      var parts = String(key).split(":")
+      return root.stripLabel("channel", parts[0]) + " · Route to " + root.stripLabel("output", parts[1])
+    }
+    var stripKind = String(kind).indexOf("output_") === 0 ? "output" : "channel"
+    return root.stripLabel(stripKind, key) + " · " + (root.bindingCaptions[kind] || kind)
+  }
+
+  // A binding is a bare number (learned before channels were recorded, and
+  // answering on any channel) or {channel, number}. Channels are 0-15 on the
+  // wire and 1-16 to people.
+  function bindingNumber(bound) {
+    return bound !== null && typeof bound === "object" ? bound.number : bound
+  }
+
+  function bindingChannel(bound) {
+    return bound !== null && typeof bound === "object" && bound.channel !== undefined
+      ? Number(bound.channel) : -1
+  }
+
+  function bindingText(bound) {
+    if (bound === undefined || bound === null) return "—"
+    var channel = root.bindingChannel(bound)
+    return String(root.bindingNumber(bound)) + (channel >= 0 ? " · ch " + (channel + 1) : "")
+  }
+
+  // The same rule the daemon matches with: equal numbers, and channels that
+  // agree or where either side answers on any channel.
+  function bindingsCollide(a, b) {
+    if (a === undefined || a === null || b === undefined || b === null) return false
+    if (root.bindingNumber(a) !== root.bindingNumber(b)) return false
+    var ca = root.bindingChannel(a), cb = root.bindingChannel(b)
+    return ca < 0 || cb < 0 || ca === cb
+  }
+
+  // Other bindings answering the same physical control as this one. Only the
+  // first of them ever fires, so any result here is a binding that is dead.
+  // Notes and control changes are separate number spaces.
+  function bindingConflicts(kind, key) {
+    var isCc = String(kind).slice(-3) === "_cc"
+    var table = root.midiBindings[kind] || ({})
+    var mine = table[key]
+    var out = []
+    if (mine === undefined || mine === null) return out
+    for (var otherKind in root.midiBindings) {
+      if ((String(otherKind).slice(-3) === "_cc") !== isCc) continue
+      var other = root.midiBindings[otherKind] || ({})
+      for (var otherKey in other) {
+        if (otherKind === kind && otherKey === key) continue
+        if (root.bindingsCollide(other[otherKey], mine))
+          out.push(root.describeBinding(otherKind, otherKey))
+      }
+    }
+    return out
+  }
+
+  // --------------------------------------------------------------- ducking
+
+  function duckFor(chanId) {
+    var entity = root.entityFor("channel", chanId)
+    return entity && entity.duck ? entity.duck : ({})
+  }
+
+  function isDucked(chanId) { return root.ducked.indexOf(String(chanId)) !== -1 }
+
+  // What a channel can duck under: any other channel, or an input.
+  function duckTriggerOptions(chanId) {
+    var options = [{ value: "", label: "Off" }]
+    for (var i = 0; i < root.channels.length; i++)
+      if (String(root.channels[i].id) !== String(chanId))
+        options.push({ value: String(root.channels[i].id), label: String(root.channels[i].label || root.channels[i].id) })
+    for (var j = 0; j < root.inputs.length; j++)
+      options.push({ value: String(root.inputs[j].id), label: String(root.inputs[j].label || root.inputs[j].id) + " (input)" })
+    return options
+  }
+
+  function setDuck(chanId, trigger, amount) {
+    root.activate("set-duck", "[<(" + root.quoted(chanId) + ", " + root.quoted(trigger) + ", "
+      + Number(amount).toFixed(1) + ")>]")
+  }
+
+  // ---------------------------------------------------------------- scenes
+
+  // The stores a scene captures; must match SCENE_STORES in the daemon.
+  readonly property var sceneStores: [
+    "volume", "muted", "solo", "routes", "output_volume", "output_muted", "output_solo"
+  ]
+
+  function sceneFor(sceneId) {
+    for (var i = 0; i < root.scenes.length; i++)
+      if (String(root.scenes[i].id) === String(sceneId)) return root.scenes[i]
+    return null
+  }
+
+  // Whether the live mix is what this scene would recall, so the scene can be
+  // shown as current. Compared over what both sides know about: a strip added
+  // after the scene was saved does not stop it matching.
+  function sceneMatches(scene) {
+    if (!scene) return false
+    for (var i = 0; i < root.sceneStores.length; i++) {
+      var store = root.sceneStores[i]
+      var saved = scene[store] || ({})
+      var live = root.config[store] || ({})
+      for (var id in saved) {
+        if (live[id] === undefined) continue
+        if (store === "routes") {
+          for (var out in saved[id])
+            if (live[id][out] !== undefined && !!live[id][out] !== !!saved[id][out]) return false
+        } else if (typeof saved[id] === "number") {
+          if (Math.abs(Number(live[id]) - saved[id]) >= 0.5) return false
+        } else if (!!live[id] !== !!saved[id]) {
+          return false
+        }
+      }
+    }
+    return true
+  }
+
+  function saveScene(label) { root.activate("save-scene", "[<" + root.quoted(label) + ">]") }
+  function updateScene(id) { root.activate("update-scene", "[<" + root.quoted(id) + ">]") }
+  function removeScene(id) { root.activate("remove-scene", "[<" + root.quoted(id) + ">]") }
+  function recallScene(id) { root.activate("recall-scene", "[<" + root.quoted(id) + ">]") }
+
+  function renameScene(id, label) {
+    root.activate("rename-scene", "[<(" + root.quoted(id) + ", " + root.quoted(label) + ")>]")
+  }
+
+  function midiUnbind(kind, key) {
+    root.activate("midi-unbind", "[<(" + root.quoted(kind) + ", " + root.quoted(key) + ")>]")
+  }
+
   function setAutostart(enabled) {
     root.activate("set-autostart", "[<" + (enabled ? "true" : "false") + ">]")
+  }
+
+  function setMidiOsd(enabled) {
+    root.activate("set-midi-osd", "[<" + (enabled ? "true" : "false") + ">]")
+  }
+
+  function setSoftTakeover(enabled) {
+    root.activate("set-soft-takeover", "[<" + (enabled ? "true" : "false") + ">]")
   }
 
   function setMidiPort(portMatch) {

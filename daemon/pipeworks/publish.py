@@ -71,6 +71,9 @@ class StatePublisher:
                     for name, description in self._devices.input_devices()
                 ],
             },
+            # Where a newly started application lands. Usually one of the
+            # channels; anything else means apps bypass the mixer.
+            "defaultSink": self._devices.default_sink(),
             "autostart": {
                 "enabled": self._autostart.is_enabled(),
                 "canToggle": getattr(self._autostart, "can_toggle", True),
@@ -93,6 +96,8 @@ class StatePublisher:
             # rather than hardcoded in the window, so the two cannot disagree
             # about what a slider means.
             "effects": effects_module.catalogue(),
+            # Channels stepping aside for their trigger right now.
+            "ducked": self._mixer.ducked_channels(),
             "status": self._status,
             "statusSerial": self._status_serial,
         }

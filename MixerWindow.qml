@@ -23,9 +23,42 @@ Item {
 
   property bool closingFromHost: false
 
-  function open(_payloadJson) {
+  // The payload may name a strip whose settings should open with the window,
+  // or a scene to edit ("new" to save one):
+  //   omarchy-shell shell summon pipeworks.mixer '{"settings":{"kind":"channel","id":"game"}}'
+  //   omarchy-shell shell summon pipeworks.mixer '{"scene":"new"}'
+  function open(payloadJson) {
     closingFromHost = false
     window.visible = true
+    var payload = ({})
+    try { payload = JSON.parse(String(payloadJson || "{}")) || ({}) } catch (error) {}
+    if (payload.scene) root.openScene(String(payload.scene))
+    var target = payload.settings
+    root.pendingSettings = target && target.kind && target.id ? target : null
+    root.openPendingSettings()
+  }
+
+  // Only one overlay at a time: they share a layer.
+  function openScene(sceneId) {
+    settings.close()
+    addStrip.close()
+    if (sceneId === "new") sceneSettings.showNew()
+    else sceneSettings.show(sceneId)
+  }
+
+  // Held until config has loaded: a window mounted by this very summon has not
+  // read it yet, and the strip would not be found.
+  property var pendingSettings: null
+
+  function openPendingSettings() {
+    if (!root.pendingSettings) return
+    var kind = String(root.pendingSettings.kind)
+    var entity = mixer.entityFor(kind, String(root.pendingSettings.id))
+    if (!entity) return
+    root.pendingSettings = null
+    addStrip.close()
+    sceneSettings.close()
+    settings.show(kind, entity)
   }
 
   function close() {
@@ -49,6 +82,7 @@ Item {
 
   Connections {
     target: mixer
+    function onConfigChanged() { root.openPendingSettings() }
     function onStatusSerialChanged() {
       if (mixer.statusSerial <= 0 || mixer.status === "") return
       root.statusText = mixer.status
@@ -156,12 +190,113 @@ Item {
               // Only one overlay at a time: they share a layer, so opening the
               // second on top of the first leaves two dialogs stacked with only
               // the upper one reachable.
-              onClicked: { settings.close(); addStrip.show() }
+              onClicked: { settings.close(); sceneSettings.close(); addStrip.show() }
             }
           }
         }
 
         Rectangle {
+          Layout.fillWidth: true
+          Layout.preferredHeight: 1
+          color: Util.alpha(Color.foreground, 0.09)
+        }
+
+        // ------------------------------------------------------------ scenes
+        //
+        // A scene is the whole mix - levels, mutes, solos, routing - saved
+        // under a name. Click one to recall it; the cog edits it. The scene
+        // that matches the live mix is highlighted.
+
+        RowLayout {
+          visible: mixer.available
+          Layout.fillWidth: true
+          Layout.leftMargin: Style.space(20)
+          Layout.rightMargin: Style.space(20)
+          Layout.topMargin: Style.space(10)
+          Layout.bottomMargin: Style.space(10)
+          spacing: Style.space(8)
+
+          Text {
+            text: "Scenes"
+            color: Util.alpha(Color.foreground, 0.5)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          Flickable {
+            Layout.fillWidth: true
+            Layout.preferredHeight: sceneChips.implicitHeight
+            contentWidth: sceneChips.implicitWidth
+            contentHeight: height
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentWidth > width
+
+            RowLayout {
+              id: sceneChips
+              spacing: Style.space(6)
+
+              Text {
+                visible: mixer.scenes.length === 0
+                text: "None yet - save the current mix to recall it later."
+                color: Util.alpha(Color.foreground, 0.35)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              Repeater {
+                model: mixer.scenes
+
+                delegate: RowLayout {
+                  required property var modelData
+                  readonly property bool current: mixer.sceneMatches(modelData)
+                  spacing: 0
+
+                  Button {
+                    text: String(modelData.label || modelData.id)
+                    fontSize: Style.font.bodySmall
+                    horizontalPadding: Style.space(8)
+                    verticalPadding: Style.space(3)
+                    bordered: true
+                    active: current
+                    foreground: current ? Color.accent : Color.foreground
+                    fontFamily: Style.font.family
+                    tooltipText: current ? "The mix is set to this scene" : "Recall this scene"
+                    onClicked: mixer.recallScene(modelData.id)
+                  }
+
+                  Button {
+                    // md-cog (U+F0493)
+                    iconText: "\u{f0493}"
+                    iconSize: Style.font.caption
+                    horizontalPadding: Style.space(4)
+                    verticalPadding: Style.space(2)
+                    foreground: Util.alpha(Color.foreground, 0.5)
+                    fontFamily: Style.font.family
+                    tooltipText: "Edit " + String(modelData.label || modelData.id)
+                    onClicked: root.openScene(String(modelData.id))
+                  }
+                }
+              }
+            }
+          }
+
+          Button {
+            text: "Save scene"
+            // md-plus (U+F0415)
+            iconText: "\u{f0415}"
+            iconSize: Style.font.bodySmall
+            fontSize: Style.font.bodySmall
+            bordered: true
+            foreground: Color.foreground
+            fontFamily: Style.font.family
+            tooltipText: "Save the current mix as a scene"
+            onClicked: root.openScene("new")
+          }
+        }
+
+        Rectangle {
+          visible: mixer.available
           Layout.fillWidth: true
           Layout.preferredHeight: 1
           color: Util.alpha(Color.foreground, 0.09)
@@ -188,10 +323,10 @@ Item {
           // The row takes its own implicit width from the strips; reading that
           // here is safe because nothing sets the row's width back from it.
           contentWidth: sections.implicitWidth + Style.space(40)
-          contentHeight: height
+          contentHeight: sections.height + Style.space(32)
           clip: true
           boundsBehavior: Flickable.StopAtBounds
-          interactive: contentWidth > width
+          interactive: contentWidth > width || contentHeight > height
 
           RowLayout {
             id: sections
@@ -202,7 +337,11 @@ Item {
             // hundreds of spare pixels, and handing them all to the strips just
             // stretches the apps block into an empty field. Past the cap the
             // slack stays below the cards, where it looks like what it is.
-            height: Math.min(body.height - Style.space(32), Style.space(600))
+            //
+            // There is a floor as well: below it a card's apps block and
+            // routing buttons are crushed and clipped, so a short window
+            // scrolls instead.
+            height: Math.max(Style.space(480), Math.min(body.height - Style.space(32), Style.space(600)))
             spacing: Style.space(20)
 
             StripGroup {
@@ -215,6 +354,7 @@ Item {
               Layout.alignment: Qt.AlignTop
               onSettingsRequested: function (kind, entity) {
                 addStrip.close()
+                sceneSettings.close()
                 settings.show(kind, entity)
               }
             }
@@ -229,6 +369,7 @@ Item {
               Layout.alignment: Qt.AlignTop
               onSettingsRequested: function (kind, entity) {
                 addStrip.close()
+                sceneSettings.close()
                 settings.show(kind, entity)
               }
             }
@@ -243,6 +384,7 @@ Item {
               Layout.alignment: Qt.AlignTop
               onSettingsRequested: function (kind, entity) {
                 addStrip.close()
+                sceneSettings.close()
                 settings.show(kind, entity)
               }
             }
@@ -354,6 +496,39 @@ Item {
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
           }
+
+          // fillHeight off explicitly: a layout nested in a layout defaults it
+          // to true, and this row then took the whole window from the strips.
+          // Its switches fill the row's own height, so the pair stay equal.
+          RowLayout {
+            id: midiToggles
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.topMargin: Style.space(4)
+            spacing: Style.space(8)
+
+            Toggle {
+              Layout.fillWidth: true
+              Layout.preferredWidth: 1
+              Layout.fillHeight: true
+              label: "Soft takeover"
+              description: "After a level changes in software, a fader takes over again only once it is brought to that level, so nothing jumps."
+              checked: mixer.softTakeover
+              fontFamily: Style.font.family
+              onClicked: mixer.setSoftTakeover(!checked)
+            }
+
+            Toggle {
+              Layout.fillWidth: true
+              Layout.preferredWidth: 1
+              Layout.fillHeight: true
+              label: "Show changes on screen"
+              description: "Faders and buttons on the board show what they changed on the shell's OSD."
+              checked: mixer.midiOsd
+              fontFamily: Style.font.family
+              onClicked: mixer.setMidiOsd(!checked)
+            }
+          }
         }
 
         // The dropdown above is the last thing in this ColumnLayout, and its
@@ -363,12 +538,16 @@ Item {
         // height. This is exactly that room, sized for the popup at its
         // internal 8-row cap so it stays enough even as more devices are
         // plugged in.
+        //
+        // The switches sit below the dropdown, and the popup may draw over
+        // them, so their height counts towards that room.
         Item {
           Layout.fillWidth: true
           Layout.preferredHeight: midiSection.midiOptions.length > 0
-            ? Style.spacing.popupRowHeight * Math.min(midiSection.midiOptions.length, 8)
+            ? Math.max(0, Style.spacing.popupRowHeight * Math.min(midiSection.midiOptions.length, 8)
               + Style.spacing.labelGap * (Math.min(midiSection.midiOptions.length, 8) - 1)
               + Style.space(16)
+              - midiToggles.height - Style.space(4) - Style.space(12))
             : 0
         }
       }
@@ -387,9 +566,17 @@ Item {
         z: 100
       }
 
+      SceneSettings {
+        id: sceneSettings
+        model: mixer
+        notice: root.statusText
+        z: 100
+      }
+
       StripSettings {
         id: settings
         model: mixer
+        notice: root.statusText
         z: 100
       }
     }

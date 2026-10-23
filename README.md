@@ -82,6 +82,7 @@ shell's other surfaces, so matching on class alone would float those too.
 |---|---|
 | Left click the bar icon | Open/close the fader panel |
 | Middle click the bar icon | Open the mixer window |
+| Scroll on the bar icon | Turn one strip up or down (the first output, unless set) |
 | Panel fader | Set that strip's level |
 | Panel speaker icon | Toggle mute |
 | Panel output buttons | Toggle routing of that channel to that output |
@@ -101,6 +102,61 @@ currently playing into it, one chip per application in that channel's colour.
 Drag a chip onto another channel to move that application there. New
 applications appear in whichever channel is your default sink, so routing one is
 a drag rather than a trip through pavucontrol.
+
+The star in a channel's heading marks your default sink - where newly started
+applications land. Click the star on another channel to make that the
+default instead. Only channels can be chosen here, so new apps never bypass
+the mixer by accident.
+
+## Scenes
+
+A scene is the whole mix saved under a name: every level, mute, solo and
+route. **Save scene** in the mixer window stores the mix as it is now; click a
+scene to recall it, or use the scene buttons in the bar panel. The scene that
+matches the live mix is highlighted. The cog beside a scene renames it,
+replaces it with the current mix, binds a button on the control surface to
+recall it, or deletes it.
+
+Scenes leave structure alone - which strips exist, their devices and their
+effects - and a strip added after a scene was saved keeps its own settings when
+that scene is recalled. With MIDI-only volume on, recalling a scene from the
+window or the bar restores everything except levels; recalling it from the
+control surface restores levels too.
+
+```sh
+gdbus call --session --dest io.github.pipeworks.Pipeworks \
+  --object-path /io/github/pipeworks/Pipeworks \
+  --method org.gtk.Actions.Activate "recall-scene" "[<'gaming'>]" "{}"
+```
+
+Scene ids are made from the name when it is saved (`Gaming` → `gaming`) and
+stay the same if it is renamed, which is what makes them safe to bind to a
+key.
+
+## Ducking
+
+A channel can step aside while another one is carrying sound: music and game
+audio dipping whenever someone talks in Chat, or whenever your own microphone
+is open. Set it in the channel's settings under **Ducking** - pick what it
+should duck under (another channel, or an input) and how far to lower it.
+
+The fader does not move. The level sent to PipeWire is scaled while the trigger
+is active, the strip shows "ducked", and the channel comes back up, eased over
+a fraction of a second, once the trigger has been quiet for 0.8 s - long enough
+not to pump between words. A trigger you have muted or turned all the way down
+never ducks anything.
+
+To hear whether a trigger is active, the daemon runs one small `pw-record` per
+trigger in use, on that strip's sink monitor at 8 kHz mono; the samples are
+measured and thrown away. Nothing runs while no channel ducks.
+
+```sh
+gdbus call --session --dest io.github.pipeworks.Pipeworks \
+  --object-path /io/github/pipeworks/Pipeworks \
+  --method org.gtk.Actions.Activate "set-duck" "[<('music', 'chat', 50.0)>]" "{}"
+```
+
+An empty trigger (`''`) switches ducking off for that channel.
 
 ## Selecting a control surface
 
@@ -126,6 +182,50 @@ Faders in both the panel and the window stay visible but go inert and dim, so it
 is obvious the level is reserved rather than broken. Mute, solo and routing keep
 working from software either way, and the setting persists in
 `~/.config/pipeworks/config.json` as `volume_locked`.
+
+## Soft takeover
+
+Faders on most control surfaces have no motors, so after a level is changed
+anywhere but the board - the window, the bar panel, a scene - the physical
+fader no longer matches it. With **Soft takeover** on (the default, in the
+mixer window under Control surface), that fader is ignored until it is brought
+within 3% of the current level or swept through it, and then it takes over
+again. Without it, the first touch makes the level jump to wherever the fader
+happens to be.
+
+```sh
+gdbus call --session --dest io.github.pipeworks.Pipeworks \
+  --object-path /io/github/pipeworks/Pipeworks \
+  --method org.gtk.Actions.Activate "set-soft-takeover" "[<false>]" "{}"
+```
+
+A fader the board has not moved since the daemon started has nothing to be
+compared against, so its first movement always applies.
+
+## On-screen changes
+
+With **Show changes on screen** on (the default, in the mixer window under
+Control surface), whatever the board just did appears on the shell's OSD -
+"Music 45%" for a fader, "Chat muted" for a button, the scene name for a scene
+button. A fader that soft takeover is holding back says where to bring it:
+"Game: move up to 70%".
+
+The OSD is reached through `omarchy-shell shell summon omarchy.osd`, because
+the shell does not let a third-party plugin summon another plugin directly. A
+fader sweep produces dozens of changes a second, so calls run one at a time and
+only the newest is sent.
+
+## Scrolling on the bar icon
+
+The mouse wheel over the bar icon turns one strip up or down in 5% steps and
+shows the shell's volume OSD. By default that is the first output; to choose
+another, name it (or give its id):
+
+```sh
+omarchy bar set pipeworks.mixer scrollStrip "Music"
+```
+
+With MIDI-only volume on, the wheel changes nothing and the OSD says so.
 
 ## The mute indicator
 
@@ -162,8 +262,17 @@ name or its id.
   high-pass, gate, compressor, three-band tone and reverb, switched on
   individually and adjusted while you listen. Switching one on briefly
   interrupts that strip; moving a control does not.
+* **Output effects** — high-pass, compressor, three-band tone and a limiter on
+  any physical output, processing everything played through that device. Tune
+  the room speakers differently from the headset, or keep a ceiling on both.
 * **MIDI control** — Learn any fader or button on a control surface, with LED
-  feedback on boards that support it.
+  feedback on boards that support it. The ✕ beside a binding clears it.
+  Learning a control that is already bound elsewhere moves it rather than
+  leaving two bindings on one button (only one of which would ever fire), and
+  the window says where it was taken from. Bindings record the MIDI channel
+  as well as the number, so a board that reuses the same numbers on several
+  channels (layers or banks) binds each one separately; bindings learned
+  before that are bare numbers and answer on any channel.
 * **Application routing** — every channel shows the applications playing into
   it as colour-coded chips; drag a chip onto another channel to move it there,
   and the choice is remembered next time that application starts.
@@ -182,6 +291,8 @@ Fader.qml          vertical fader
 LevelMeter.qml     vertical segmented meter
 AppChip.qml        a running application, draggable between channels
 StripSettings.qml  rename, device, microphones, effects, MIDI Learn, remove
+SceneSettings.qml  save, rename, update, bind and delete a scene
+LearnRow.qml       one MIDI Learn row, shared by both dialogs
 AddStrip.qml       add a channel, input or output
 daemon/            the audio brain — no window, no toolkit
   run.py           launcher
@@ -205,8 +316,11 @@ gdbus call --session --dest io.github.pipeworks.Pipeworks \
 
 Levels and switches: `set-volume`, `set-output-volume`, `toggle-mute`,
 `toggle-output-mute`, `toggle-solo`, `toggle-output-solo`, `toggle-route`,
-`set-volume-lock`, `toggle-volume-lock`.
-Application routing: `move-stream`.
+`set-volume-lock`, `toggle-volume-lock`, `set-soft-takeover`, `set-midi-osd`,
+`set-duck`.
+Scenes: `save-scene`, `update-scene`, `rename-scene`, `remove-scene`,
+`recall-scene`.
+Application routing: `move-stream`, `set-default-channel`.
 Structural: `add-channel`, `add-input`, `add-output`, `remove-strip`,
 `rename-strip`, `retarget-input`, `retarget-output`.
 An input's microphones: `add-input-source`, `remove-input-source`,
@@ -214,7 +328,7 @@ An input's microphones: `add-input-source`, `remove-input-source`,
 one virtual sink that already exists, so adding one is only extra links and does
 not interrupt audio the way adding a whole input does.
 Effects: `set-effect-enabled`, `set-effect-control`.
-Control surface: `midi-learn`, `midi-learn-cancel`, `set-midi-port`.
+Control surface: `midi-learn`, `midi-learn-cancel`, `midi-unbind`, `set-midi-port`.
 Housekeeping: `set-autostart`, `set-state-watch`, `show-window`.
 
 What a front end needs to *read* rather than command does not fit an action, so
@@ -253,6 +367,18 @@ loaded, exposed all three controls, and passed no audio whatsoever. Both
 outputs are summed into a mixer instead, which uses every port and leaves the
 effect mono in and mono out, so the graph stays mono and filter-chain still
 replicates it per channel.
+
+Outputs carry effects too, from a set suited to a whole device rather than a
+voice: high-pass, compressor, tone, and a limiter that only outputs have
+(LSP's mono limiter, with its gain boost off so it is a ceiling rather than a
+loudness maximiser). With any of them on, every strip routed to that output
+links into the output's chain, and the chain links to the device - so the
+output's own fader and mute still apply last. The chain adds a few
+milliseconds of latency to that output.
+
+A chain that cannot start - a plugin package missing, say - is stopped and
+bypassed, so the strip keeps working without its effects instead of going
+silent, and the window says so. It is not retried until its settings change.
 
 Values are stored in the units shown on screen — dB, Hz, milliseconds — and
 converted on the way to the plugin, because LSP takes thresholds as linear

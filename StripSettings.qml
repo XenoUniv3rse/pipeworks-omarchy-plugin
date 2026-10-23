@@ -19,16 +19,24 @@ Item {
   // object comes from a model only rebuilt when strips are added, removed or
   // renamed, so it would not show a microphone added while this is open.
   property string stripId: ""
+  // The daemon's latest status, shown here too: the window header that
+  // normally carries it is dimmed behind this overlay, and a Learn that moved
+  // a binding from somewhere else is exactly the moment to read it.
+  property string notice: ""
 
   readonly property bool open: root.stripId !== ""
   readonly property var entity: root.open
     ? root.model.entityFor(root.kind, root.stripId) : null
+  readonly property var duck: root.kind === "channel" && root.open
+    ? root.model.duckFor(root.stripId) : ({})
+  readonly property real duckAmount: root.duck.amount !== undefined ? Number(root.duck.amount) : 50
+  readonly property bool hasEffects: root.kind === "input" || root.kind === "output"
   readonly property string stripLabel: root.entity
     ? String(root.entity.label || root.stripId) : root.stripId
 
-  // What a Learn row binds, per kind of strip. A route has one row per output,
-  // keyed "channel:output", which is why these are built rather than listed.
-  readonly property var learnRows: {
+  // What a Learn row binds, per kind of strip, split into the strip's own
+  // controls and its routing so the two read as separate groups.
+  readonly property var controlRows: {
     if (!root.open) return []
     var rows = []
     if (root.kind === "output") {
@@ -38,17 +46,25 @@ Item {
     } else {
       rows.push({ caption: "Volume", kind: "volume_cc", key: root.stripId })
       rows.push({ caption: "Mute", kind: "mute_note", key: root.stripId })
-      if (root.kind === "channel") {
+      if (root.kind === "channel")
         rows.push({ caption: "Solo", kind: "solo_note", key: root.stripId })
-        for (var i = 0; i < root.model.outputs.length; i++) {
-          var output = root.model.outputs[i]
-          rows.push({
-            caption: "Route to " + String(output.label || output.id),
-            kind: "route_note",
-            key: root.stripId + ":" + String(output.id)
-          })
-        }
-      }
+    }
+    return rows
+  }
+
+  // Channels only: one row per output, keyed "channel:output" and captioned
+  // with the output's current name, so adding, removing or renaming an output
+  // changes this list rather than leaving a fixed set of labels behind.
+  readonly property var routeRows: {
+    if (!root.open || root.kind !== "channel") return []
+    var rows = []
+    for (var i = 0; i < root.model.outputs.length; i++) {
+      var output = root.model.outputs[i]
+      rows.push({
+        caption: "Route to " + String(output.label || output.id),
+        kind: "route_note",
+        key: root.stripId + ":" + String(output.id)
+      })
     }
     return rows
   }
@@ -355,7 +371,7 @@ Item {
         }
 
         PanelSeparator {
-          visible: root.kind === "input"
+          visible: root.hasEffects
           Layout.fillWidth: true
         }
 
@@ -363,24 +379,38 @@ Item {
         //
         // Switching one on rebuilds the strip's filter graph, which its chain
         // host only picks up when it restarts - so a switch blips this strip's
-        // audio, while every slider below is live.
+        // audio, while every slider below is live. Inputs and outputs carry
+        // different sets: an output's effects process everything played
+        // through that device.
 
         Text {
-          visible: root.kind === "input"
+          visible: root.hasEffects
           text: "Effects"
           color: Util.alpha(Color.foreground, 0.5)
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
         }
 
+        Text {
+          visible: root.kind === "output"
+          Layout.fillWidth: true
+          text: "Everything playing through " + root.stripLabel + " passes these. Switching one on or off briefly interrupts it."
+          color: Util.alpha(Color.foreground, 0.4)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
         Repeater {
-          model: root.kind === "input" ? root.model.effectsCatalogue : []
+          model: root.hasEffects ? root.model.effectsFor(root.kind) : []
 
           delegate: ColumnLayout {
             required property var modelData
 
             readonly property string effectId: String(modelData.id)
             readonly property bool on: root.model.effectEnabled(root.stripId, effectId)
+            readonly property string description: String(root.kind === "output"
+              ? (modelData.outputDescription || modelData.description) : modelData.description)
 
             Layout.fillWidth: true
             Layout.bottomMargin: Style.space(2)
@@ -399,13 +429,13 @@ Item {
                 active: on
                 foreground: on ? Color.accent : Util.alpha(Color.foreground, 0.55)
                 fontFamily: Style.font.family
-                tooltipText: String(modelData.description)
+                tooltipText: description
                 onClicked: root.model.setEffectEnabled(root.stripId, effectId, !on)
               }
 
               Text {
                 Layout.fillWidth: true
-                text: String(modelData.description)
+                text: description
                 color: Util.alpha(Color.foreground, on ? 0.5 : 0.32)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
@@ -468,6 +498,88 @@ Item {
           }
         }
 
+        // --------------------------------------------------------- ducking
+        //
+        // Channels only: this channel plays quieter while another channel or
+        // an input is carrying sound. The fader is not moved - the level is
+        // scaled on the way out, and comes back once the trigger goes quiet.
+
+        PanelSeparator {
+          visible: root.kind === "channel"
+          Layout.fillWidth: true
+        }
+
+        Text {
+          visible: root.kind === "channel"
+          text: "Ducking"
+          color: Util.alpha(Color.foreground, 0.5)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          visible: root.kind === "channel"
+          Layout.fillWidth: true
+          text: "Lower " + root.stripLabel + " while this is playing:"
+          color: Util.alpha(Color.foreground, 0.55)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
+        Dropdown {
+          id: duckTrigger
+          visible: root.kind === "channel"
+          Layout.fillWidth: true
+          showLabel: false
+          options: root.kind === "channel" ? root.model.duckTriggerOptions(root.stripId) : []
+          value: String(root.duck.trigger || "")
+          fontFamily: Style.font.family
+          onChanged: function (value) {
+            if (value === String(root.duck.trigger || "")) return
+            root.model.setDuck(root.stripId, value, root.duckAmount)
+          }
+        }
+
+        RowLayout {
+          visible: root.kind === "channel" && String(root.duck.trigger || "") !== ""
+          Layout.fillWidth: true
+          spacing: Style.space(6)
+
+          Text {
+            Layout.preferredWidth: Style.space(74)
+            text: "Lower by"
+            color: Util.alpha(Color.foreground, 0.6)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          PanelSlider {
+            id: duckSlider
+            Layout.fillWidth: true
+            minimum: 10
+            maximum: 90
+            step: 5
+            integer: true
+            value: dragging ? liveValue : root.duckAmount
+            fillColor: Color.accent
+            // Applied on release only: each change re-syncs the listeners, and
+            // there is nothing to hear while dragging unless the trigger talks.
+            onReleased: function (value) {
+              root.model.setDuck(root.stripId, String(root.duck.trigger || ""), value)
+            }
+          }
+
+          Text {
+            Layout.preferredWidth: Style.space(52)
+            horizontalAlignment: Text.AlignRight
+            text: Math.round(duckSlider.dragging ? duckSlider.liveValue : root.duckAmount) + "%"
+            color: Util.alpha(Color.foreground, 0.55)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+        }
+
         PanelSeparator { Layout.fillWidth: true }
 
         // ------------------------------------------------------------ MIDI
@@ -492,56 +604,52 @@ Item {
           }
         }
 
+        Text {
+          visible: root.notice !== ""
+          Layout.fillWidth: true
+          text: root.notice
+          color: Color.accent
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
         Repeater {
-          model: root.learnRows
+          model: root.controlRows
+          delegate: LearnRow { mixer: root.model }
+        }
 
-          delegate: RowLayout {
-            required property var modelData
+        // --------------------------------------------------------- routing
+        //
+        // Its own section: these toggle where the channel is heard, not
+        // anything about the channel itself.
 
-            readonly property var table: root.model.midiBindings[modelData.kind] || ({})
-            readonly property var bound: table[modelData.key]
-            // The daemon publishes which control is waiting, so a Learn started
-            // here and a Learn still pending from before look the same.
-            readonly property bool waiting: String(root.model.learn.kind) === modelData.kind
-              && String(root.model.learn.key) === modelData.key
+        PanelSeparator {
+          visible: root.kind === "channel"
+          Layout.fillWidth: true
+        }
 
-            Layout.fillWidth: true
-            spacing: Style.space(6)
+        Text {
+          visible: root.kind === "channel"
+          text: "Routing"
+          color: Util.alpha(Color.foreground, 0.5)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
 
-            Text {
-              Layout.fillWidth: true
-              text: modelData.caption
-              color: Color.foreground
-              font.family: Style.font.family
-              font.pixelSize: Style.font.bodySmall
-              elide: Text.ElideRight
-            }
+        Text {
+          visible: root.kind === "channel" && root.routeRows.length === 0
+          Layout.fillWidth: true
+          text: "There are no outputs to route to."
+          color: Util.alpha(Color.foreground, 0.4)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
 
-            Text {
-              text: bound === undefined || bound === null ? "—" : String(bound)
-              color: Util.alpha(Color.foreground, 0.55)
-              font.family: Style.font.family
-              font.pixelSize: Style.font.bodySmall
-            }
-
-            Button {
-              text: waiting ? "Waiting…" : "Learn"
-              fontSize: Style.font.caption
-              horizontalPadding: Style.space(6)
-              verticalPadding: Style.space(2)
-              bordered: true
-              active: waiting
-              foreground: waiting ? Color.accent : Util.alpha(Color.foreground, 0.6)
-              fontFamily: Style.font.family
-              tooltipText: root.model.midiConnected
-                ? "Move the control you want bound to this"
-                : "No control surface is connected"
-              onClicked: {
-                if (waiting) root.model.midiLearnCancel()
-                else root.model.midiLearn(modelData.kind, modelData.key)
-              }
-            }
-          }
+        Repeater {
+          model: root.routeRows
+          delegate: LearnRow { mixer: root.model }
         }
 
         PanelSeparator { Layout.fillWidth: true }

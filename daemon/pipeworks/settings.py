@@ -35,6 +35,26 @@ LEGACY_PIPEWIRE_CONF_PATHS = (
 # Substring identifying the control surface's MIDI port.
 MIDI_PORT_MATCH = "SMC-Mixer-Private"
 
+# Soft takeover: after a level is changed from anywhere but the board, a
+# physical fader only takes control again once it comes within this many
+# percent of the current level, or passes through it.
+SOFT_TAKEOVER_TOLERANCE = 3
+
+# Ducking: a trigger counts as active while its peak is above this level, and
+# for this long after it last was - long enough to ride over the gaps between
+# words, so a ducked channel does not pump up and down mid-sentence.
+DUCK_THRESHOLD_DB = -40.0
+DUCK_RELEASE_SECONDS = 0.8
+DUCK_DEFAULT_AMOUNT = 50
+# A new capture's first moments are not the trigger's audio - pw-record opens
+# with a transient that measured near full scale - so they are ignored.
+DUCK_SETTLE_SECONDS = 0.3
+# Coming back up is eased over a few steps rather than snapped.
+DUCK_FADE_STEPS = 4
+DUCK_FADE_STEP_MS = 70
+# A trigger's capture that died (PipeWire restarting) is retried after this.
+DUCK_RETRY_SECONDS = 3
+
 # Faders can fire dozens of updates a second; volume writes are coalesced to
 # at most one per this interval.
 VOLUME_THROTTLE_SECONDS = 0.05

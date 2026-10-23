@@ -122,6 +122,24 @@ Rectangle {
         elide: Text.ElideRight
       }
 
+      // Where newly started applications land. Lit on the channel that is
+      // the default; clicking another moves the default there.
+      Button {
+        visible: root.isChannel
+        readonly property bool isDefault: root.model.defaultSink === root.sinkName
+        // md-star (U+F04CE) / md-star_outline (U+F04D2)
+        iconText: isDefault ? "\u{f04ce}" : "\u{f04d2}"
+        iconSize: Style.font.bodySmall
+        horizontalPadding: Style.space(3)
+        verticalPadding: Style.space(2)
+        foreground: isDefault ? root.accent : Util.alpha(Color.foreground, 0.3)
+        fontFamily: Style.font.family
+        tooltipText: isDefault
+          ? "New apps play into " + root.stripLabel
+          : "Make new apps play into " + root.stripLabel
+        onClicked: if (!isDefault) root.model.setDefaultChannel(root.stripId)
+      }
+
       Button {
         // md-cog (U+F0493)
         iconText: "\u{f0493}"
@@ -176,8 +194,12 @@ Rectangle {
       Layout.alignment: Qt.AlignHCenter
       // The live value while dragging, so the number tracks the knob rather
       // than lagging a bus round trip behind it.
+      // "ducked" while the channel is stepping aside for its trigger, so a
+      // level that sounds lower than the fader says has an explanation.
       text: Math.round(fader.dragging ? fader.liveValue : root.level) + "%"
-      color: Util.alpha(Color.foreground, 0.65)
+        + (root.isChannel && root.model.isDucked(root.stripId) ? " · ducked" : "")
+      color: root.isChannel && root.model.isDucked(root.stripId)
+        ? Color.accent : Util.alpha(Color.foreground, 0.65)
       font.family: Style.font.family
       font.pixelSize: Style.font.caption
     }

@@ -32,6 +32,14 @@ class DeviceRegistry:
             devices.append((name, entry.get("description") or name))
         return devices
 
+    def default_sink(self):
+        """The sink new applications play into, by node name."""
+        result = self._runner.capture("pactl", "get-default-sink")
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    def set_default_sink(self, sink_name):
+        self._runner.run("pactl", "set-default-sink", sink_name)
+
     def sink_names_by_index(self):
         """Maps numeric sink index to node name, for resolving stream targets."""
         try:

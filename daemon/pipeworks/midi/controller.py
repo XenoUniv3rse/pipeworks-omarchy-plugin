@@ -9,6 +9,7 @@ import re
 import rtmidi
 
 from .. import settings
+from .bindings import binding_channel, binding_number
 
 NOTE_ON = 0x90
 CONTROL_CHANGE = 0xB0
@@ -62,7 +63,15 @@ class MidiController:
         self._dispatch = dispatch
 
         self._learn_target = None
-        self.on_learned = lambda kind, key, number: None
+        self.on_learned = lambda kind, key, number, displaced: None
+        # Something the board just did: ("level" | "pickup" | "press", kind,
+        # key, fader position). For showing it on screen.
+        self.on_surface = lambda event, kind, key, value: None
+
+        # Soft takeover, per (kind, key): the level this board last set, and
+        # where the fader physically was last time it moved.
+        self._surface_set = {}
+        self._surface_seen = {}
 
         self._midi_in = rtmidi.MidiIn(rtmidi.API_LINUX_ALSA)
         self._midi_out = rtmidi.MidiOut(rtmidi.API_LINUX_ALSA)
@@ -110,8 +119,19 @@ class MidiController:
     # ------------------------------------------------------------------
     # LEDs
 
-    def set_led(self, note, on):
-        self._midi_out.send_message([NOTE_ON, note, LED_ON_VELOCITY if on else 0])
+    def set_led(self, binding, on):
+        """Lights a button's LED, on the channel it was learned on.
+
+        Takes a binding as stored - a bare note or {"channel", "number"} - so
+        a board that layers buttons across channels lights the right one.
+        """
+        number = binding_number(binding)
+        if number is None:
+            return
+        channel = binding_channel(binding) or 0
+        self._midi_out.send_message(
+            [NOTE_ON | channel, number, LED_ON_VELOCITY if on else 0]
+        )
 
     def sync_leds(self):
         for note, is_on in self._bindings.led_states():
@@ -131,42 +151,81 @@ class MidiController:
         if len(message) < 3:
             return
         status = message[0] & 0xF0
+        # The low nibble is the channel. It used to be thrown away, which made
+        # boards that reuse numbers across channels trigger the wrong strip.
+        channel = message[0] & 0x0F
         if status == NOTE_ON:
             note, velocity = message[1], message[2]
             if velocity > 0:  # note-on with velocity 0 is a release
-                self._dispatch(self._handle_note, note)
+                self._dispatch(self._handle_note, note, channel)
         elif status == CONTROL_CHANGE:
-            self._dispatch(self._handle_cc, message[1], message[2])
+            self._dispatch(self._handle_cc, message[1], message[2], channel)
 
-    def _handle_note(self, note):
-        if self._consume_learn(note, self._bindings.is_note_kind):
+    def _handle_note(self, note, channel=None):
+        if self._consume_learn(note, channel, self._bindings.is_note_kind):
             return
-        for kind, key in self._bindings.matches_for_note(note):
+        for kind, key in self._bindings.matches_for_note(note, channel):
             self._invoke_note_action(kind, key)
+            self.on_surface("press", kind, key, None)
             return
 
-    def _handle_cc(self, controller, value):
-        if self._consume_learn(controller, self._bindings.is_cc_kind):
+    def _handle_cc(self, controller, value, channel=None):
+        if self._consume_learn(controller, channel, self._bindings.is_cc_kind):
             return
         percent = round(value / 127 * 100)
-        for kind, key in self._bindings.matches_for_cc(controller):
+        for kind, key in self._bindings.matches_for_cc(controller, channel):
+            if not self._takes_over(kind, key, percent):
+                self.on_surface("pickup", kind, key, percent)
+                return
             # from_surface: the lock exists to keep software out, not the board.
             if kind == "volume_cc":
                 self._mixer.set_volume(key, percent, from_surface=True)
             else:
                 self._mixer.set_output_volume(key, percent, from_surface=True)
+            self._surface_set[(kind, key)] = percent
+            self.on_surface("level", kind, key, percent)
             return
 
-    def _consume_learn(self, number, accepts_kind):
+    def _takes_over(self, kind, key, percent):
+        """Whether a fader movement should change the level (soft takeover).
+
+        If the level is still what this board last set it to, the fader is in
+        control. If something else has moved it since - the window, a scene -
+        the fader and the level disagree, and applying the fader would make
+        the level jump. It is ignored until it comes close to the level or
+        crosses it, the way motorless hardware mixers pick up.
+
+        A fader this board has not moved since the daemon started has no
+        record, so it is trusted: there is nothing to compare it against.
+        """
+        binding = (kind, key)
+        previous = self._surface_seen.get(binding)
+        self._surface_seen[binding] = percent
+        if not self._mixer.config.get("midi_soft_takeover", True):
+            return True
+        last_set = self._surface_set.get(binding)
+        if last_set is None:
+            return True
+        store = "volume" if kind == "volume_cc" else "output_volume"
+        current = self._mixer.config[store].get(key)
+        if current is None or abs(current - last_set) < 0.5:
+            return True
+        if abs(percent - current) <= settings.SOFT_TAKEOVER_TOLERANCE:
+            return True
+        # Crossed it between two messages: a quick move can step right over
+        # the tolerance window without ever landing inside it.
+        return previous is not None and (previous - current) * (percent - current) <= 0
+
+    def _consume_learn(self, number, channel, accepts_kind):
         """Assigns a pending Learn if the message type matches what it wants."""
         if not self._learn_target:
             return False
         kind, key = self._learn_target
         if not accepts_kind(kind):
             return True  # swallow: wrong message type for this binding
-        self._bindings.assign(kind, key, number)
+        displaced = self._bindings.assign(kind, key, number, channel)
         self._learn_target = None
-        self.on_learned(kind, key, number)
+        self.on_learned(kind, key, number, displaced)
         return True
 
     def _invoke_note_action(self, kind, key):
@@ -181,6 +240,8 @@ class MidiController:
             self._mixer.toggle_output_mute(key)
         elif kind == "output_solo_note":
             self._mixer.toggle_output_solo(key)
+        elif kind == "scene_note":
+            self._mixer.recall_scene(key, from_surface=True)
 
 
 class NullMidiController:
@@ -194,7 +255,8 @@ class NullMidiController:
     learning = None
 
     def __init__(self):
-        self.on_learned = lambda kind, key, number: None
+        self.on_learned = lambda kind, key, number, displaced: None
+        self.on_surface = lambda event, kind, key, value: None
 
     def start_learn(self, kind, key):
         pass
@@ -202,7 +264,7 @@ class NullMidiController:
     def cancel_learn(self):
         pass
 
-    def set_led(self, note, on):
+    def set_led(self, binding, on):
         pass
 
     def sync_leds(self):

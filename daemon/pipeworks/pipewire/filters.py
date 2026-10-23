@@ -18,6 +18,7 @@ switch costs a restart.
 import os
 import shutil
 import subprocess
+import time
 
 from .. import settings
 from ..audio import effects as effects_module
@@ -85,6 +86,11 @@ class FilterChainHost:
         self._runner = runner
         self._directory = directory
         self._processes = {}
+        # Configs that did not come up, per strip. Not retried until the
+        # config changes: a chain that cannot load must not be restarted every
+        # few seconds by the watchdog, cutting the strip each time.
+        self._failed = {}
+        self.on_failed = lambda strip_id: None
         self.clear_strays()
 
     def clear_strays(self):
@@ -113,23 +119,53 @@ class FilterChainHost:
 
     # ------------------------------------------------------------------
 
-    def apply(self, strip_id, label, strip_effects):
+    def apply(self, strip_id, label, strip_effects, kind="input"):
         """Brings one strip's chain in line with its config.
 
         Returns True when a chain is running afterwards, so the caller knows
         whether to route through it or straight past it.
         """
-        nodes, links = effects_module.build_graph(strip_effects)
+        nodes, links = effects_module.build_graph(strip_effects, kind)
         if not nodes:
             self.stop(strip_id)
+            self._failed.pop(strip_id, None)
             return False
 
         wanted = self._render(strip_id, label, nodes, links)
+        if self._failed.get(strip_id) == wanted:
+            return False
         existing = self._read(self.conf_path(strip_id))
         if wanted != existing or not self.running(strip_id):
             self._write(self.conf_path(strip_id), wanted)
             self.restart(strip_id)
+            # Links made before the chain's ports exist simply fail, which
+            # left the strip silent until the watchdog's next pass. Waiting
+            # here costs a moment once, when an effect is switched.
+            if not self._wait_ready(strip_id):
+                self.stop(strip_id)
+                self._failed[strip_id] = wanted
+                self.on_failed(strip_id)
+                return False
+        self._failed.pop(strip_id, None)
         return True
+
+    def failed(self, strip_id):
+        return strip_id in self._failed
+
+    def _wait_ready(self, strip_id, timeout=3.0):
+        """Waits for a freshly started chain's ports to appear in the graph."""
+        wanted_in = f"{self.input_node(strip_id)}:input_FL"
+        wanted_out = f"{self.output_node(strip_id)}:output_FL"
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self.running(strip_id):
+                return False  # exited: the config did not load
+            inputs = self._runner.capture("pw-link", "-i").stdout or ""
+            outputs = self._runner.capture("pw-link", "-o").stdout or ""
+            if wanted_in in inputs.split() and wanted_out in outputs.split():
+                return True
+            time.sleep(0.1)
+        return False
 
     def running(self, strip_id):
         process = self._processes.get(strip_id)

@@ -14,11 +14,13 @@ from gi.repository import GLib
 
 from . import autostart as autostart_module
 from . import settings
+from .audio.ducking import Ducker
 from .audio.metering import clear_stale_meters
 from .audio.mixer import Mixer
 from .config import ConfigRepository
-from .midi.bindings import MidiBindings
+from .midi.bindings import MidiBindings, binding_channel
 from .midi.controller import MidiController, MidiPortsNotFound, NullMidiController
+from .osd import OsdNotifier, describe_surface_change
 from .pipewire.backend import PipeWireBackend
 from .publish import StatePublisher
 from .pipewire.devices import DeviceRegistry
@@ -59,10 +61,13 @@ class MixerService:
         self.streams = StreamRouter(self.runner, self.devices)
 
         self.filters = FilterChainHost(self.runner)
+        self.filters.on_failed = self._on_effects_failed
         self.mixer = Mixer(
             self.config, self.repository, self.backend,
             scheduler=_glib_scheduler, filters=self.filters,
         )
+        self.osd = OsdNotifier()
+        self.ducker = Ducker(self.runner, dispatch=_glib_dispatch, scheduler=_glib_scheduler)
         self.bindings = MidiBindings(self.config, self.repository)
         self.midi = self._open_control_surface()
         self.autostart = autostart_module.create(self.runner)
@@ -105,6 +110,7 @@ class MixerService:
         self.midi = self._open_control_surface(port_match)
         self.mixer.on_led = self.midi.reflect_change
         self.midi.on_learned = self._on_learned
+        self.midi.on_surface = self._on_surface
         self.midi.sync_leds()
         self.state.set_midi(self.midi)
         self._report(
@@ -112,12 +118,33 @@ class MixerService:
             else f"{port_match} not found; still usable by mouse"
         )
 
+    def unbind(self, kind, key):
+        """Clears one control-surface binding.
+
+        A button that no longer controls anything must not keep showing the
+        state of the thing it used to, so its LED goes dark - and the rest are
+        re-synced in case another binding shares that note and should stay lit.
+        """
+        bound = self.bindings.unassign(kind, key)
+        if bound is None:
+            return
+        if self.bindings.is_note_kind(kind):
+            self.midi.set_led(bound, False)
+            self.midi.sync_leds()
+
     def start(self):
         """Brings the graph up to match saved state and starts watching it."""
         self.mixer.on_led = self.midi.reflect_change
+        self.midi.on_surface = self._on_surface
+        # Through self.midi at call time: set_midi_port swaps the controller.
+        self.mixer.on_leds_changed = lambda: self.midi.sync_leds()
+        self.mixer.on_status = self._report
+        self.ducker.on_trigger = self.mixer.set_trigger_active
+        self.mixer.on_ducking_changed = lambda: self.ducker.sync(self.config)
         self.midi.on_learned = self._on_learned
         self.mixer.apply_all()
         self.midi.sync_leds()
+        self.ducker.sync(self.config)
         if self._heal_timer is None:
             self._heal_timer = GLib.timeout_add_seconds(
                 settings.GRAPH_HEAL_SECONDS, self._check_graph
@@ -131,6 +158,7 @@ class MixerService:
         # Effect chains are our children; leaving them running would orphan a
         # pipewire process per strip every time the daemon restarts.
         self.filters.stop_all()
+        self.ducker.stop_all()
 
     # ------------------------------------------------------------------
     # Published state
@@ -168,19 +196,69 @@ class MixerService:
             GLib.source_remove(self._state_timer)
             self._state_timer = None
 
-    def _on_learned(self, _kind, _key, _number):
+    def _on_learned(self, kind, key, number, displaced=()):
         """A control surface binding just completed.
 
         The controller has already stored and saved it, so all that is left is
         lighting the board correctly and telling the window - which is watching
         the state file for exactly this, since "waiting for a knob" has to stop
-        looking like it is still waiting.
+        looking like it is still waiting. If the control was taken from another
+        binding, that is said out loud: the other one just stopped working.
 
         Runs on the main loop: the controller marshals MIDI messages there
         before handling them, so this is not on the rtmidi thread.
         """
         self.midi.sync_leds()
-        self.state.publish()
+        if displaced:
+            control = ("Note " if self.bindings.is_note_kind(kind) else "CC ") + str(number)
+            channel = binding_channel(self.bindings.get(kind, key))
+            if channel is not None:
+                control += f" (ch {channel + 1})"
+            previous = ", ".join(self.describe_binding(k, s) for k, s in displaced)
+            self._report(f"{control} moved from {previous} to {self.describe_binding(kind, key)}")
+        else:
+            self.state.publish()
+
+    _BINDING_CAPTIONS = {
+        "scene_note": "Recall",
+        "volume_cc": "Volume", "mute_note": "Mute", "solo_note": "Solo",
+        "output_volume_cc": "Volume", "output_mute_note": "Mute",
+        "output_solo_note": "Solo",
+    }
+
+    def _on_surface(self, event, kind, key, value):
+        """The board changed something: show it, unless that is switched off."""
+        if not self.config.get("midi_osd", True):
+            return
+        payload = describe_surface_change(self.mixer, event, kind, key, value)
+        if payload:
+            self.osd.show(payload)
+
+    def _on_effects_failed(self, strip_id):
+        entity = self.mixer.inputs_by_id.get(strip_id) or self.mixer.outputs_by_id.get(strip_id)
+        label = entity.get("label", strip_id) if entity else strip_id
+        self._report(f"Effects on {label} could not start - playing without them")
+
+    def describe_binding(self, kind, key):
+        """What a binding drives, the way the window names it: "Game · Mute"."""
+        mixer = self.mixer
+
+        def label(table, strip_id):
+            entity = table.get(strip_id)
+            return entity.get("label", strip_id) if entity else strip_id
+
+        if kind == "scene_note":
+            scene = self.mixer.scene(key)
+            return f"Scene {scene.get('label', key) if scene else key} · Recall"
+        if kind == "route_note":
+            chan_id, _, out_id = key.partition(":")
+            strips = {**mixer.channels_by_id, **mixer.inputs_by_id}
+            return f"{label(strips, chan_id)} · Route to {label(mixer.outputs_by_id, out_id)}"
+        if kind.startswith("output_"):
+            strip = label(mixer.outputs_by_id, key)
+        else:
+            strip = label({**mixer.channels_by_id, **mixer.inputs_by_id}, key)
+        return f"{strip} · {self._BINDING_CAPTIONS.get(kind, kind)}"
 
     # ------------------------------------------------------------------
 
