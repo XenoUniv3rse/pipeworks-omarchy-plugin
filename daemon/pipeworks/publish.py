@@ -14,6 +14,7 @@ several times a second for nothing.
 """
 import json
 import os
+import sys
 import tempfile
 
 from . import settings
@@ -91,7 +92,7 @@ class StatePublisher:
             # is actually watching - so this costs nothing while idle, and stays
             # current if a board is plugged or unplugged while the picker is
             # open.
-            "midiPorts": probe_ports(),
+            "midiPorts": self._probe_midi_ports(),
             # What effects exist and the range of every control. Published
             # rather than hardcoded in the window, so the two cannot disagree
             # about what a slider means.
@@ -101,6 +102,18 @@ class StatePublisher:
             "status": self._status,
             "statusSerial": self._status_serial,
         }
+
+    def _probe_midi_ports(self):
+        """The boards ALSA can see, or the last list if it cannot be read.
+
+        Only a picker uses this, so a failure here must never stop the rest
+        of the state - running apps, Learn progress - from reaching the window.
+        """
+        try:
+            self._midi_ports = probe_ports()
+        except Exception as error:
+            print(f"pipeworks: cannot list MIDI ports: {error}", file=sys.stderr)
+        return self._midi_ports
 
     def publish(self):
         """Writes the current snapshot, if it differs from the last one."""

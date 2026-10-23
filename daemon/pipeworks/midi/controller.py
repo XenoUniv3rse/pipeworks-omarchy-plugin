@@ -45,9 +45,18 @@ def probe_ports():
     itself searches for - so a name from this list is always a match that will
     resolve, whichever slot ALSA happens to assign the device to next time.
     """
+    # Released explicitly: each probe is an ALSA sequencer client, and they
+    # were not being freed. This runs on every state publish, so the daemon
+    # piled up dozens until ALSA refused to create another - at which point
+    # the probe raised, every publish failed, and the window froze on stale
+    # state.
     probe = rtmidi.MidiIn(rtmidi.API_LINUX_ALSA)
+    try:
+        names = probe.get_ports()
+    finally:
+        probe.delete()
     seen = []
-    for name in probe.get_ports():
+    for name in names:
         if name.startswith(_IGNORED_CLIENT_PREFIXES):
             continue
         stable = _ADDRESS_SUFFIX.sub("", name).strip()
