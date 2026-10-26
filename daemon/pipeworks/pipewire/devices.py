@@ -37,6 +37,10 @@ class DeviceRegistry:
         result = self._runner.capture("pactl", "get-default-sink")
         return result.stdout.strip() if result.returncode == 0 else ""
 
+    def default_source(self):
+        result = self._runner.capture("pactl", "get-default-source")
+        return result.stdout.strip() if result.returncode == 0 else ""
+
     def set_default_sink(self, sink_name):
         self._runner.run("pactl", "set-default-sink", sink_name)
 

@@ -18,16 +18,25 @@ class LoopbackProvisioner:
         self._runner = runner
         self._conf_path = conf_path
 
-    def write(self, channels, inputs):
+    def render(self, channels, inputs):
         blocks = [self._block(chan["label"], chan["sink"]) for chan in channels]
         blocks += [
             self._block(inp["label"], inp["target_sink"], exposes_source=True)
             for inp in inputs
         ]
-        content = "context.modules = [\n" + "\n".join(blocks) + "\n]\n"
+        return "context.modules = [\n" + "\n".join(blocks) + "\n]\n"
+
+    def is_current(self, channels, inputs):
+        """Whether the drop-in on disk declares exactly these strips."""
+        if not os.path.exists(self._conf_path):
+            return False
+        with open(self._conf_path) as handle:
+            return handle.read() == self.render(channels, inputs)
+
+    def write(self, channels, inputs):
         os.makedirs(os.path.dirname(self._conf_path), exist_ok=True)
         with open(self._conf_path, "w") as handle:
-            handle.write(content)
+            handle.write(self.render(channels, inputs))
         self._remove_legacy_configs()
 
     @staticmethod

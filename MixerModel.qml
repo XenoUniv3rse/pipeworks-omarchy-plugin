@@ -263,6 +263,17 @@ QtObject {
     onFileChanged: reload()
   }
 
+  // A file that does not exist yet is never watched, so the daemon creating
+  // it - on a fresh install, its first start - went unnoticed and the panel
+  // waited on "Starting the mixer" for good. Until it has loaded once, look
+  // again every couple of seconds.
+  property var _configRetry: Timer {
+    interval: 2000
+    repeat: true
+    running: !root.loaded
+    onTriggered: root._configFile.reload()
+  }
+
   property var _stateFile: FileView {
     path: root.statePath
     watchChanges: true

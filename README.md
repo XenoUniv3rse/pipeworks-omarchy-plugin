@@ -24,7 +24,12 @@ Optional extras:
 
 The plugin bundles its daemon and the shell keeps it running — there is no
 separate app and no systemd unit. The bar widget tells you if a required
-package is missing.
+package is missing, with the command to copy, and checks again by itself.
+
+On its first start Pipeworks sets itself up for the machine it is on: one
+output (your default speakers or headphones), your default microphone, and the
+virtual channels — creating those restarts PipeWire once, so audio blips. New
+apps then start in **System**.
 
 To float the window instead of tiling it, in `~/.config/hypr/hyprland.lua`:
 

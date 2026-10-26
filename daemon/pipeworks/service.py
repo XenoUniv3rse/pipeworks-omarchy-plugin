@@ -32,6 +32,43 @@ from .pipewire.streams import StreamRouter
 from .runner import CommandRunner
 
 
+def fit_defaults_to_machine(config, devices, ports):
+    """Points a first-run config at this machine's own devices.
+
+    The built-in defaults name one particular desktop's headset, speakers and
+    microphone; on any other machine they are devices that do not exist, so a
+    fresh install played into nothing. Use this machine's default output and
+    microphone instead, falling back to the first real one of each.
+    """
+    outputs = devices.output_devices()
+    default_sink = devices.default_sink()
+    sink = next((name for name, _ in outputs if name == default_sink),
+                outputs[0][0] if outputs else None)
+
+    output_ids = []
+    if sink:
+        port_l, port_r = ports.playback(sink)
+        config["outputs"] = [{"id": "master", "label": "Main", "port_l": port_l,
+                              "port_r": port_r, "effects": {}}]
+        output_ids = ["master"]
+    else:
+        config["outputs"] = []
+    for store, value in (("output_volume", 100), ("output_muted", False), ("output_solo", False)):
+        config[store] = {out_id: value for out_id in output_ids}
+
+    inputs = devices.input_devices()
+    default_source = devices.default_source()
+    source = next((name for name, _ in inputs if name == default_source),
+                  inputs[0][0] if inputs else None)
+    for inp in config["inputs"]:
+        inp["sources"] = [{"name": source, "volume": 100}] if source else []
+
+    for chan in config["channels"]:
+        config["routes"][chan["id"]] = {out_id: True for out_id in output_ids}
+    for inp in config["inputs"]:
+        config["routes"][inp["id"]] = {out_id: False for out_id in output_ids}
+
+
 def _glib_scheduler(delay_ms, callback):
     """One-shot deferral, so the domain layer never imports GLib itself."""
     GLib.timeout_add(delay_ms, lambda: (callback(), False)[1])
@@ -49,15 +86,20 @@ class MixerService:
 
         clear_stale_meters(self.runner)
 
+        ports = PortResolver(self.runner)
+        self.devices = DeviceRegistry(self.runner)
+
         self.config = self.repository.load()
-        if not self.repository.exists():
+        # A config carried over from the plugin's old name is not a first run:
+        # its devices are someone's real setup.
+        self.first_run = not self.repository.exists() and self.repository.legacy_source() is None
+        if self.first_run:
+            fit_defaults_to_machine(self.config, self.devices, ports)
             self.repository.save(self.config)
 
-        ports = PortResolver(self.runner)
         self.backend = PipeWireBackend(
             self.runner, ports, GraphLinker(self.runner), LoopbackProvisioner(self.runner)
         )
-        self.devices = DeviceRegistry(self.runner)
         self.streams = StreamRouter(self.runner, self.devices)
 
         self.filters = FilterChainHost(self.runner)
@@ -142,9 +184,16 @@ class MixerService:
         self.ducker.on_trigger = self.mixer.set_trigger_active
         self.mixer.on_ducking_changed = lambda: self.ducker.sync(self.config)
         self.midi.on_learned = self._on_learned
+        provisioned = self.backend.ensure_provisioned(self.config["channels"], self.config["inputs"])
         self.mixer.apply_all()
         self.midi.sync_leds()
         self.ducker.sync(self.config)
+        if self.first_run and self.config["channels"]:
+            # A mixer nobody plays into does nothing: send new apps to the
+            # first channel, once, on the very first start.
+            self.devices.set_default_sink(self.config["channels"][0]["sink"])
+        if provisioned:
+            self._report("Created the virtual channels and microphone")
         if self._heal_timer is None:
             self._heal_timer = GLib.timeout_add_seconds(
                 settings.GRAPH_HEAL_SECONDS, self._check_graph

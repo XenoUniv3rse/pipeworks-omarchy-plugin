@@ -72,3 +72,16 @@ class PipeWireBackend:
     def provision(self, channels, inputs):
         self._provisioner.write(channels, inputs)
         self._provisioner.restart()
+
+    def ensure_provisioned(self, channels, inputs):
+        """Declares the strips if PipeWire does not have them yet.
+
+        The drop-in used to be written only when a strip was added or removed,
+        so a fresh install had channels in its config and no devices behind
+        them. Returns True if it had to (re)write it - which restarts
+        PipeWire, so it is skipped whenever the file already matches.
+        """
+        if self._provisioner.is_current(channels, inputs):
+            return False
+        self.provision(channels, inputs)
+        return True

@@ -122,6 +122,10 @@ class ConfigRepository:
             config = json.load(handle)
         return self._migrate(config)
 
+    def legacy_source(self):
+        """The old-name config a first load would migrate, or None."""
+        return None if self.exists() else self._legacy_config()
+
     @staticmethod
     def _legacy_config():
         """A config written under a previous name, so a rename does not throw

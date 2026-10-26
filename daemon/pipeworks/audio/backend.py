@@ -28,3 +28,6 @@ class AudioBackend(Protocol):
     # --- provisioning ---------------------------------------------------
     def provision(self, channels: Iterable[dict], inputs: Iterable[dict]) -> None:
         """Persist the virtual-device definitions and make them live."""
+
+    def ensure_provisioned(self, channels: Iterable[dict], inputs: Iterable[dict]) -> bool:
+        """provision() only if the persisted definitions are missing or stale."""
