@@ -78,6 +78,11 @@ DEFAULT_CONFIG = {
     # Which control surface to open, as a stable (sequencer-address-stripped)
     # ALSA port name. See midi.controller.probe_ports.
     "midi_port_match": settings.MIDI_PORT_MATCH,
+    # "midi" for a board (midi_port_match picks which), or "keyboard" for the
+    # keyboard's volume keys driving keyboard_target - a strip id, or "" for
+    # the first output.
+    "control_surface": "midi",
+    "keyboard_target": "",
     # Soft takeover ("pickup"): a physical fader that no longer matches the
     # level - because the window or a scene changed it - is ignored until it
     # is brought back to that level, instead of making the level jump.

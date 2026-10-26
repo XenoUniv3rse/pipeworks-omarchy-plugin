@@ -53,6 +53,9 @@ QtObject {
   readonly property bool softTakeover: config.midi_soft_takeover !== false
   readonly property bool midiOsd: config.midi_osd !== false
   readonly property bool windowFloating: config.window_floating !== false
+  // "keyboard" when the volume keys are the control surface, else "midi".
+  readonly property string controlSurface: String(config.control_surface || "midi")
+  readonly property string keyboardTarget: String(config.keyboard_target || "")
 
   readonly property var streams: state.streams instanceof Array ? state.streams : []
   readonly property var outputDevices: state.devices && state.devices.outputs instanceof Array
@@ -668,6 +671,12 @@ QtObject {
 
   function setAutostart(enabled) {
     root.activate("set-autostart", "[<" + (enabled ? "true" : "false") + ">]")
+  }
+
+  function useKeyboard() { root.activate("use-keyboard", "[]") }
+
+  function setKeyboardTarget(id) {
+    root.activate("set-keyboard-target", "[<" + root.quoted(id) + ">]")
   }
 
   function setWindowFloating(floating) {

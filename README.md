@@ -129,7 +129,13 @@ scene recalled from the screen restores everything except levels.
 ### Control surface
 
 Pick your board in **Settings** (the ⚙ in the header), then use **Learn** in
-any strip's settings and move the control you want. Buttons light
+any strip's settings and move the control you want.
+
+No board — on a laptop, say? Choose **Keyboard (volume keys)** instead and pick
+which strip the keys adjust (the first output unless you choose another). Volume
+up and down move it 5%, 1% with Alt, and Mute mutes it, with the usual OSD.
+Pipeworks takes the keys over in Hyprland only while Keyboard is chosen — your
+config is never edited, and choosing a board again gives them back. Buttons light
 their LEDs on boards that have them.
 
 * The ✕ next to a binding clears it. Learning a control that is already bound
@@ -167,7 +173,7 @@ gdbus call --session --dest io.github.pipeworks.Pipeworks \
 | Microphones | `add-input-source (ss)`, `remove-input-source (ss)`, `set-input-source-volume (ssd)` |
 | EQ | `set-eq (ss)`, `save-eq-preset (ss)`, `remove-eq-preset s` |
 | Effects | `set-effect-enabled (ssb)`, `set-effect-control (sssd)` |
-| Control surface | `midi-learn (ss)`, `midi-learn-cancel`, `midi-unbind (ss)`, `set-midi-port s` |
+| Control surface | `midi-learn (ss)`, `midi-learn-cancel`, `midi-unbind (ss)`, `set-midi-port s`, `use-keyboard`, `set-keyboard-target s`, `keyboard-volume s` |
 | Housekeeping | `set-autostart b`, `set-state-watch b`, `show-window`, `quit` |
 
 Strips are addressed by id (`music`, `mic`, `master`…), scenes by the id made

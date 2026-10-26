@@ -27,6 +27,19 @@ Item {
   // the full name "SINCO:SINCO SMC-Mixer-Private" that probing reports.
   // Resolving it to that full name is what lets the dropdown highlight the
   // right row instead of showing nothing selected on a working setup.
+  // What the volume keys can drive: any strip, or the first output.
+  readonly property var keyboardTargets: {
+    var options = [{ value: "", label: "The first output" + (root.model.outputs.length
+      ? " (" + String(root.model.outputs[0].label || root.model.outputs[0].id) + ")" : "") }]
+    var groups = [[root.model.outputs, "output"], [root.model.channels, "channel"], [root.model.inputs, "input"]]
+    for (var g = 0; g < groups.length; g++)
+      for (var i = 0; i < groups[g][0].length; i++) {
+        var strip = groups[g][0][i]
+        options.push({ value: String(strip.id), label: String(strip.label || strip.id) + " (" + groups[g][1] + ")" })
+      }
+    return options
+  }
+
   readonly property string resolvedPort: {
     for (var i = 0; i < root.model.midiPorts.length; i++) {
       if (root.model.midiPortMatch !== ""
@@ -39,8 +52,11 @@ Item {
   // Every board ALSA can see, plus whatever is configured even if it is not
   // detected right now - unplugged and unconfigured are different situations,
   // and both deserve to be visible.
+  readonly property bool keyboard: root.model.controlSurface === "keyboard"
+
+  // The keyboard first: on a laptop it is usually the only choice there is.
   readonly property var midiOptions: {
-    var options = []
+    var options = [{ value: "keyboard", label: "Keyboard (volume keys)" }]
     for (var i = 0; i < root.model.midiPorts.length; i++)
       options.push({ value: root.model.midiPorts[i], label: root.model.midiPorts[i] })
     if (root.model.midiPortMatch !== "" && root.model.midiPorts.indexOf(root.resolvedPort) === -1)
@@ -161,11 +177,11 @@ Item {
             width: Style.space(6)
             height: Style.space(6)
             radius: width / 2
-            color: root.model.midiConnected ? Qt.rgba(0.35, 0.80, 0.40, 1) : Color.urgent
+            color: root.keyboard || root.model.midiConnected ? Qt.rgba(0.35, 0.80, 0.40, 1) : Color.urgent
           }
 
           Text {
-            text: root.model.midiConnected ? "connected" : "not connected"
+            text: root.keyboard ? "volume keys" : (root.model.midiConnected ? "connected" : "not connected")
             color: Util.alpha(Color.foreground, 0.4)
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
@@ -173,29 +189,71 @@ Item {
         }
 
         Dropdown {
-          visible: root.midiOptions.length > 0
           Layout.fillWidth: true
           showLabel: false
           options: root.midiOptions
-          value: root.resolvedPort
+          value: root.keyboard ? "keyboard" : root.resolvedPort
           fontFamily: Style.font.family
-          // Selecting a listed device stores its full name, replacing whatever
-          // match was configured before - so picking a device once is also how
+          // Selecting a listed board stores its full name, replacing whatever
+          // match was configured before - so picking a board once is also how
           // an old short match upgrades to an exact one.
-          onChanged: function (value) { root.model.setMidiPort(value) }
+          onChanged: function (value) {
+            if (value === "keyboard") { if (!root.keyboard) root.model.useKeyboard() }
+            else root.model.setMidiPort(value)
+          }
         }
 
         Text {
-          visible: root.midiOptions.length === 0
+          visible: !root.keyboard && root.model.midiPorts.length === 0
           Layout.fillWidth: true
-          text: "No MIDI device detected. Plug in your board to select it."
+          text: "No MIDI board detected. Plug one in, or choose Keyboard to use the volume keys."
           color: Color.urgent
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap
         }
 
+        // ----------------------------------------------------- keyboard
+
+        RowLayout {
+          visible: root.keyboard
+          Layout.fillWidth: true
+          Layout.fillHeight: false
+          spacing: Style.space(8)
+
+          Text {
+            text: "Volume keys adjust"
+            color: Color.foreground
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Dropdown {
+            id: keyboardTarget
+            Layout.fillWidth: true
+            showLabel: false
+            options: root.keyboardTargets
+            value: root.model.keyboardTarget
+            fontFamily: Style.font.family
+            onChanged: function (value) {
+              if (value !== root.model.keyboardTarget) root.model.setKeyboardTarget(value)
+            }
+          }
+        }
+
+        Text {
+          visible: root.keyboard
+          Layout.fillWidth: true
+          text: "Volume up and down move it 5% (1% with Alt), and Mute mutes it. Choosing a MIDI board gives the keys back to your usual bindings."
+          color: Util.alpha(Color.foreground, 0.5)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
         Toggle {
+          // Faders only: the volume keys step from wherever the level is.
+          visible: !root.keyboard
           Layout.fillWidth: true
           label: "Soft takeover"
           description: "After a level changes in software, a fader takes over again only once it is brought to that level, so nothing jumps."
@@ -207,7 +265,9 @@ Item {
         Toggle {
           Layout.fillWidth: true
           label: "Show changes on screen"
-          description: "Faders and buttons on the board show what they changed on the shell's OSD."
+          description: root.keyboard
+            ? "The volume keys show what they changed on the shell's OSD."
+            : "Faders and buttons on the board show what they changed on the shell's OSD."
           checked: root.model.midiOsd
           fontFamily: Style.font.family
           onClicked: root.model.setMidiOsd(!checked)

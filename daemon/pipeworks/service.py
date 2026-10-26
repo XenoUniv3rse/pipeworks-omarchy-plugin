@@ -20,6 +20,7 @@ from .audio.mixer import Mixer
 from .config import ConfigRepository
 from .midi.bindings import MidiBindings, binding_channel
 from .midi.controller import MidiController, MidiPortsNotFound, NullMidiController
+from .keyboard import FINE_STEP, STEP, KeyboardControl
 from .osd import OsdNotifier, describe_surface_change
 from .pipewire.backend import PipeWireBackend
 from .publish import StatePublisher
@@ -111,6 +112,7 @@ class MixerService:
         self.osd = OsdNotifier()
         self.ducker = Ducker(self.runner, dispatch=_glib_dispatch, scheduler=_glib_scheduler)
         self.bindings = MidiBindings(self.config, self.repository)
+        self.keyboard = KeyboardControl(self.runner, dispatch=_glib_dispatch)
         self.midi = self._open_control_surface()
         self.autostart = autostart_module.create(self.runner)
         self.state = StatePublisher(
@@ -125,6 +127,10 @@ class MixerService:
     # ------------------------------------------------------------------
 
     def _open_control_surface(self, port_match=None):
+        # With the keyboard as the control surface no board is opened: the
+        # two are alternatives, and a board left open would still answer.
+        if self.config.get("control_surface") == "keyboard":
+            return NullMidiController()
         if port_match is None:
             port_match = self.config.get("midi_port_match", settings.MIDI_PORT_MATCH)
         try:
@@ -146,7 +152,10 @@ class MixerService:
         breaking the daemon.
         """
         self.config["midi_port_match"] = port_match
+        self.config["control_surface"] = "midi"
         self.repository.save(self.config)
+        # Picking a board gives the volume keys back.
+        self.keyboard.disable()
 
         self.midi.close()
         self.midi = self._open_control_surface(port_match)
@@ -159,6 +168,39 @@ class MixerService:
             f"Connected to {port_match}" if self.midi.connected
             else f"{port_match} not found; still usable by mouse"
         )
+
+    def use_keyboard(self):
+        """Makes the volume keys the control surface, in place of a board."""
+        self.config["control_surface"] = "keyboard"
+        self.repository.save(self.config)
+        self.midi.close()
+        self.midi = NullMidiController()
+        self.mixer.on_led = self.midi.reflect_change
+        self.midi.on_learned = self._on_learned
+        self.midi.on_surface = self._on_surface
+        self.state.set_midi(self.midi)
+        self.keyboard.enable()
+        self._report("The keyboard's volume keys now control Pipeworks")
+
+    def keyboard_volume(self, command):
+        """One press of a volume key."""
+        kind, strip_id = self.mixer.keyboard_target()
+        if strip_id is None:
+            return
+        if command == "mute":
+            if kind == "output":
+                self.mixer.toggle_output_mute(strip_id)
+                self._on_surface("press", "output_mute_note", strip_id, None)
+            else:
+                self.mixer.toggle_mute(strip_id)
+                self._on_surface("press", "mute_note", strip_id, None)
+            return
+        step = {"up": STEP, "down": -STEP, "up-fine": FINE_STEP, "down-fine": -FINE_STEP}.get(command)
+        if step is None:
+            return
+        self.mixer.nudge(kind, strip_id, step)
+        self._on_surface("level", "output_volume_cc" if kind == "output" else "volume_cc",
+                         strip_id, None)
 
     def unbind(self, kind, key):
         """Clears one control-surface binding.
@@ -188,6 +230,9 @@ class MixerService:
         self.mixer.apply_all()
         self.midi.sync_leds()
         self.ducker.sync(self.config)
+        # Runtime bindings do not survive a login, so take the keys again.
+        if self.config.get("control_surface") == "keyboard":
+            self.keyboard.enable()
         if self.first_run and self.config["channels"]:
             # A mixer nobody plays into does nothing: send new apps to the
             # first channel, once, on the very first start.

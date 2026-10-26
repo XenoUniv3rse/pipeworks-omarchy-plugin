@@ -729,6 +729,36 @@ class Mixer:
     def soft_takeover(self):
         return bool(self.config.get("midi_soft_takeover", True))
 
+    def keyboard_target(self):
+        """(kind, strip id) the volume keys drive: the chosen strip, or the
+        first output - "the volume" - if none is chosen or it is gone."""
+        wanted = self.config.get("keyboard_target") or ""
+        if wanted in self.outputs_by_id:
+            return OUTPUT, wanted
+        if wanted in self.channels_by_id:
+            return CHANNEL, wanted
+        if wanted in self.inputs_by_id:
+            return INPUT, wanted
+        if self.config["outputs"]:
+            return OUTPUT, self.config["outputs"][0]["id"]
+        return None, None
+
+    def set_keyboard_target(self, strip_id):
+        self.config["keyboard_target"] = strip_id
+        self._repository.save(self.config)
+        self.on_state_changed()
+
+    def nudge(self, kind, strip_id, delta):
+        """Moves a strip's level by delta percent, as a control surface - so
+        MIDI-only volume does not stop it. Returns the new level."""
+        store = "output_volume" if kind == OUTPUT else "volume"
+        level = max(0, min(100, round(float(self.config[store].get(strip_id, 0)) + delta)))
+        if kind == OUTPUT:
+            self.set_output_volume(strip_id, level, from_surface=True)
+        else:
+            self.set_volume(strip_id, level, from_surface=True)
+        return level
+
     def set_window_floating(self, floating):
         self.config["window_floating"] = bool(floating)
         self._repository.save(self.config)

@@ -138,6 +138,9 @@ class PipeworksApplication(Gio.Application):
             ("midi-learn", "(ss)", self._on_midi_learn),
             ("midi-learn-cancel", None, self._on_midi_learn_cancel),
             ("midi-unbind", "(ss)", self._on_midi_unbind),
+            ("use-keyboard", None, self._on_use_keyboard),
+            ("set-keyboard-target", "s", self._on_set_keyboard_target),
+            ("keyboard-volume", "s", self._on_keyboard_volume),
             # Housekeeping
             ("set-autostart", "b", self._on_set_autostart),
             ("set-state-watch", "b", self._on_set_state_watch),
@@ -422,6 +425,19 @@ class PipeworksApplication(Gio.Application):
     def _on_midi_learn_cancel(self, _action, _parameter):
         self._service.midi.cancel_learn()
         self._republish()
+
+    def _on_use_keyboard(self, _action, _parameter):
+        self._service.use_keyboard()
+        self._republish()
+
+    def _on_set_keyboard_target(self, _action, parameter):
+        strip_id = parameter.unpack()
+        if (not strip_id or self._entity("channel", strip_id) or self._entity("input", strip_id)
+                or self._entity("output", strip_id)):
+            self._mixer().set_keyboard_target(strip_id)
+
+    def _on_keyboard_volume(self, _action, parameter):
+        self._service.keyboard_volume(parameter.unpack())
 
     def _on_midi_unbind(self, _action, parameter):
         kind, key = parameter.unpack()

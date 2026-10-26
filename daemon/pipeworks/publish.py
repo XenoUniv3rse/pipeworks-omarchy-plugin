@@ -88,6 +88,7 @@ class StatePublisher:
                 "key": learning[1] if learning else "",
             },
             "midiConnected": getattr(self._midi, "connected", False),
+            "controlSurface": self._mixer.config.get("control_surface", "midi"),
             "midiPortMatch": self._mixer.config.get("midi_port_match", ""),
             # Rescanned on every publish, which only happens while some window
             # is actually watching - so this costs nothing while idle, and stays
