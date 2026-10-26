@@ -1037,7 +1037,12 @@ Item {
         spacing: Style.space(10)
 
         ValueSlider {
+          // A fixed width: the message beside it changes length as the
+          // preamp crosses into clipping, and a slider that shared the row
+          // with it was resized mid-drag, moving the knob under the pointer.
           Layout.preferredWidth: Style.space(340)
+          Layout.minimumWidth: Style.space(340)
+          Layout.maximumWidth: Style.space(340)
           label: "Preamp"
           position: (root.preamp + 24) / 36
           display: EqMath.formatGain(root.preamp)
@@ -1058,6 +1063,9 @@ Item {
 
         Text {
           Layout.fillWidth: true
+          // Takes only what is left over, never more: see the slider above.
+          Layout.preferredWidth: 0
+          Layout.minimumWidth: 0
           text: root.eqOn && root.curvePeak > 0.5
             ? "Peaks at " + EqMath.formatGain(root.curvePeak) + " - loud material may clip. Lower the preamp or use Auto."
             : (root.eqOn ? "Highest point " + EqMath.formatGain(root.curvePeak) + " - no risk of clipping." : "EQ bypassed - " + root.channelLabel + " plays unchanged.")
