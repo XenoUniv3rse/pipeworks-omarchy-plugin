@@ -197,6 +197,32 @@ BarWidget {
                    progressText: target.label + "  " + next + "%" })
   }
 
+  // The command that installs whatever the dependency check found missing.
+  // The check names python3 itself when it cannot run at all; Arch's package
+  // for that is "python".
+  readonly property var missingPackages: {
+    var missing = root.service && root.service.missingDependencies ? root.service.missingDependencies : []
+    return missing.map(function (name) { return name === "python3" ? "python" : name })
+  }
+  readonly property string installCommand: "sudo pacman -S --needed " + root.missingPackages.join(" ")
+  property bool installCopied: false
+
+  function copyInstallCommand() {
+    // Passed as an argument, not through a shell: nothing to quote.
+    copier.command = ["wl-copy", "--", root.installCommand]
+    copier.running = true
+    root.installCopied = true
+    copiedTimer.restart()
+  }
+
+  Process { id: copier }
+
+  Timer {
+    id: copiedTimer
+    interval: 2000
+    onTriggered: root.installCopied = false
+  }
+
   readonly property bool opened: popupOpen
   function open() { root.popupOpen = true }
   function close() { root.popupOpen = false }
@@ -280,15 +306,60 @@ BarWidget {
               if (!root.service) return "Pipeworks is not running."
               if (!root.service.dependenciesChecked) return "Checking dependencies..."
               if (!root.service.dependenciesOk)
-                return "Missing packages:\n  " + root.service.missingDependencies.join("\n  ")
-                  + "\n\nInstall them with:\n  sudo pacman -S "
-                  + root.service.missingDependencies.join(" ")
+                return "Missing packages:\n  " + root.missingPackages.join("\n  ")
+                  + "\n\nInstall them with:"
               return "Starting the mixer...\n" + root.service.statusSummary
             }
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.subtitle
             wrapMode: Text.WordWrap
+          }
+
+          // The install command, with a button to copy it - on a fresh
+          // machine this is the one thing standing between the plugin and
+          // working, and retyping package names from a panel is fiddly.
+          RowLayout {
+            visible: !mixer.available && !!root.service && root.service.dependenciesChecked
+              && !root.service.dependenciesOk
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            spacing: Style.space(6)
+
+            Rectangle {
+              Layout.fillWidth: true
+              Layout.preferredHeight: installText.implicitHeight + Style.space(10)
+              radius: Math.round(Style.space(5))
+              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.07)
+
+              Text {
+                id: installText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(8)
+                anchors.rightMargin: Style.space(8)
+                text: root.installCommand
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                // At spaces, so a package name is never split across lines.
+                wrapMode: Text.Wrap
+              }
+            }
+
+            Button {
+              text: root.installCopied ? "Copied" : "Copy"
+              // md-content_copy (U+F018F) / md-check (U+F012C)
+              iconText: root.installCopied ? "\u{f012c}" : "\u{f018f}"
+              iconSize: Style.font.bodySmall
+              fontSize: Style.font.bodySmall
+              bordered: true
+              foreground: root.installCopied ? Color.accent : root.foreground
+              fontFamily: root.fontFamily
+              tooltipText: "Copy the install command to paste into a terminal"
+              onClicked: root.copyInstallCommand()
+            }
           }
 
           // Every strip vertical and side by side, sections divided by a rule -
