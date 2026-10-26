@@ -56,6 +56,9 @@ QtObject {
   // "keyboard" when the volume keys are the control surface, else "midi".
   readonly property string controlSurface: String(config.control_surface || "midi")
   readonly property string keyboardTarget: String(config.keyboard_target || "")
+  readonly property bool blockVolumeKeys: config.block_volume_keys_with_board !== false
+  // What the volume keys do right now: "control", "block" or "released".
+  readonly property string volumeKeys: String(state.volumeKeys || "")
 
   readonly property var streams: state.streams instanceof Array ? state.streams : []
   readonly property var outputDevices: state.devices && state.devices.outputs instanceof Array
@@ -674,6 +677,10 @@ QtObject {
   }
 
   function useKeyboard() { root.activate("use-keyboard", "[]") }
+
+  function setBlockVolumeKeys(block) {
+    root.activate("set-block-volume-keys", "[<" + (block ? "true" : "false") + ">]")
+  }
 
   function setKeyboardTarget(id) {
     root.activate("set-keyboard-target", "[<" + root.quoted(id) + ">]")

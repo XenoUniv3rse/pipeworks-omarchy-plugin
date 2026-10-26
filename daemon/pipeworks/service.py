@@ -126,7 +126,8 @@ class MixerService:
         self.midi = self._open_control_surface()
         self.autostart = autostart_module.create(self.runner)
         self.state = StatePublisher(
-            self.streams, self.devices, self.midi, self.autostart, self.mixer
+            self.streams, self.devices, self.midi, self.autostart, self.mixer,
+            keyboard=self.keyboard,
         )
 
         self._heal_timer = None
@@ -171,8 +172,6 @@ class MixerService:
         self.config["midi_port_match"] = port_match
         self.config["control_surface"] = "midi"
         self.repository.save(self.config)
-        # Picking a board gives the volume keys back.
-        self.keyboard.disable()
 
         self.midi.close()
         self.midi = self._open_control_surface(port_match)
@@ -181,6 +180,7 @@ class MixerService:
         self.midi.on_surface = self._on_surface
         self.midi.sync_leds()
         self.state.set_midi(self.midi)
+        self.apply_volume_keys()
         self._report(
             f"Connected to {port_match}" if self.midi.connected
             else f"{port_match} not found; still usable by mouse"
@@ -196,8 +196,30 @@ class MixerService:
         self.midi.on_learned = self._on_learned
         self.midi.on_surface = self._on_surface
         self.state.set_midi(self.midi)
-        self.keyboard.enable()
+        self.apply_volume_keys()
         self._report("The keyboard's volume keys now control Pipeworks")
+
+    def apply_volume_keys(self):
+        """What the volume keys do, from the control surface in use.
+
+        Keyboard: they drive the chosen strip. A board that is connected, with
+        the option on: they do nothing, so only the board moves levels.
+        Otherwise - the option off, or a board chosen but not plugged in, when
+        blocking them would leave no way to change the volume - they are left
+        to whatever Hyprland binds them to.
+        """
+        if self.config.get("control_surface") == "keyboard":
+            self.keyboard.enable()
+        elif self.midi.connected and self.config.get("block_volume_keys_with_board", True):
+            self.keyboard.block()
+        else:
+            self.keyboard.disable()
+
+    def set_block_volume_keys(self, block):
+        self.config["block_volume_keys_with_board"] = bool(block)
+        self.repository.save(self.config)
+        self.apply_volume_keys()
+        self.state.publish()
 
     def keyboard_volume(self, command):
         """One press of a volume key."""
@@ -248,8 +270,7 @@ class MixerService:
         self.midi.sync_leds()
         self.ducker.sync(self.config)
         # Runtime bindings do not survive a login, so take the keys again.
-        if self.config.get("control_surface") == "keyboard":
-            self.keyboard.enable()
+        self.apply_volume_keys()
         if self.first_run and self.config["channels"]:
             # A mixer nobody plays into does nothing: send new apps to the
             # first channel, once, on the very first start.

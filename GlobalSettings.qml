@@ -253,11 +253,25 @@ Item {
         Text {
           visible: root.keyboard
           Layout.fillWidth: true
-          text: "Volume up and down move it 5% (1% with Alt), and Mute mutes it. Choosing a MIDI board gives the keys back to your usual bindings."
+          text: "Volume up and down move it 5% (1% with Alt), and Mute mutes it."
           color: Util.alpha(Color.foreground, 0.5)
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap
+        }
+
+        Toggle {
+          visible: !root.keyboard
+          Layout.fillWidth: true
+          label: "Turn off the volume keys while a board is in use"
+          description: !root.model.blockVolumeKeys
+            ? "The volume keys keep doing whatever your Hyprland config binds them to."
+            : (root.model.midiConnected
+                ? "Only the board changes levels: the volume keys do nothing, in every app."
+                : "The board is not connected, so the volume keys work as usual until it is.")
+          checked: root.model.blockVolumeKeys
+          fontFamily: Style.font.family
+          onClicked: root.model.setBlockVolumeKeys(!checked)
         }
 
         Toggle {

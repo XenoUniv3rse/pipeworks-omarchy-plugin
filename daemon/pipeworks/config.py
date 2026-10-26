@@ -83,6 +83,9 @@ DEFAULT_CONFIG = {
     # the first output.
     "control_surface": "midi",
     "keyboard_target": "",
+    # With a board in use, bind the volume keys to nothing so only the board
+    # moves levels; off, they are left to whatever Hyprland binds them to.
+    "block_volume_keys_with_board": True,
     # Soft takeover ("pickup"): a physical fader that no longer matches the
     # level - because the window or a scene changed it - is ignored until it
     # is brought back to that level, instead of making the level jump.

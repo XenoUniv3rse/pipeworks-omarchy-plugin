@@ -141,6 +141,7 @@ class PipeworksApplication(Gio.Application):
             ("use-keyboard", None, self._on_use_keyboard),
             ("set-keyboard-target", "s", self._on_set_keyboard_target),
             ("keyboard-volume", "s", self._on_keyboard_volume),
+            ("set-block-volume-keys", "b", self._on_set_block_volume_keys),
             # Housekeeping
             ("set-autostart", "b", self._on_set_autostart),
             ("set-state-watch", "b", self._on_set_state_watch),
@@ -435,6 +436,9 @@ class PipeworksApplication(Gio.Application):
         if (not strip_id or self._entity("channel", strip_id) or self._entity("input", strip_id)
                 or self._entity("output", strip_id)):
             self._mixer().set_keyboard_target(strip_id)
+
+    def _on_set_block_volume_keys(self, _action, parameter):
+        self._service.set_block_volume_keys(parameter.unpack())
 
     def _on_keyboard_volume(self, _action, parameter):
         self._service.keyboard_volume(parameter.unpack())

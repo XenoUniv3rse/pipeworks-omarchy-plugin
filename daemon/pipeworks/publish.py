@@ -24,12 +24,13 @@ from .midi.controller import probe_ports
 
 
 class StatePublisher:
-    def __init__(self, streams, devices, midi, autostart, mixer, path=settings.STATE_PATH):
+    def __init__(self, streams, devices, midi, autostart, mixer, path=settings.STATE_PATH, keyboard=None):
         self._streams = streams
         self._devices = devices
         self._midi = midi
         self._autostart = autostart
         self._mixer = mixer
+        self._keyboard = keyboard
         self._path = path
         self._midi_ports = []
         self._last = None
@@ -89,6 +90,9 @@ class StatePublisher:
             },
             "midiConnected": getattr(self._midi, "connected", False),
             "controlSurface": self._mixer.config.get("control_surface", "midi"),
+            # What the volume keys are doing right now: "control", "block" or
+            # "released" (left to Hyprland's own bindings).
+            "volumeKeys": getattr(self._keyboard, "mode", "released") if self._keyboard else "released",
             "midiPortMatch": self._mixer.config.get("midi_port_match", ""),
             # Rescanned on every publish, which only happens while some window
             # is actually watching - so this costs nothing while idle, and stays
