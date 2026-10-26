@@ -532,7 +532,7 @@ BarWidget {
     // lit amber at half fader and red at eighty percent, so a channel turned
     // down to barely audible still looked like it was running hot. Amber now
     // means "approaching clipping" and red "at it".
-    readonly property real floorDb: -50
+    readonly property real floorDb: -60
     readonly property real amberDb: -12
     readonly property real redDb: -3
 
@@ -665,10 +665,10 @@ BarWidget {
     // same cubic curve PipeWire uses for volume.
     readonly property real meterPeak: {
       if (strip.muted) return 0
-      var raw = peakMonitor.peak || 0
-      if (!strip.isOutput) return raw
+      var amplitude = mixer.peakToAmplitude(peakMonitor.peak || 0)
+      if (!strip.isOutput) return amplitude
       var fraction = Math.max(0, Math.min(100, strip.level)) / 100
-      return raw * fraction * fraction * fraction
+      return amplitude * fraction * fraction * fraction
     }
 
     // Node properties are only valid while the node is bound.

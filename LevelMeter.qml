@@ -21,7 +21,7 @@ Item {
   // lit amber at half fader and red at eighty percent, so a channel turned
   // down to barely audible still looked like it was running hot. Amber now
   // means "approaching clipping" and red "at it".
-  readonly property real floorDb: -50
+  readonly property real floorDb: -60
   readonly property real amberDb: -12
   readonly property real redDb: -3
 

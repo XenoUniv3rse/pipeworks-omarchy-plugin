@@ -114,13 +114,30 @@ QtObject {
     return null
   }
 
+  // What PwNodePeakMonitor reports is not the signal's amplitude: it is on the
+  // cube-root scale PipeWire uses for volume sliders, so a -21 dBFS tone reads
+  // as 0.45 (-7 "dB"). Treated as amplitude, every meter sat far too high and
+  // barely moved with the fader - 31% looked nearly full. Cubing it gives the
+  // real amplitude back; measured against a known tone, they agree.
+  function peakToAmplitude(peak) {
+    var p = Math.max(0, Number(peak) || 0)
+    return p * p * p
+  }
+
   // Maps a linear peak to a 0-1 meter position on a dB scale. A linear scale is
   // useless here: everyday audio never approaches full scale, so normal content
   // would barely lift the meter off the floor.
+  //
+  // The floor is -60 dBFS, as on most mixers' meters: with honest readings a
+  // channel at a moderate level sits around -40, and a -50 floor left it
+  // barely off the bottom. LevelMeter and the bar panel's meter use the same
+  // floor for where amber and red begin.
+  readonly property real meterFloorDb: -60
+
   function peakToLevel(peak) {
     if (!peak || peak <= 0) return 0
     var db = 20 * Math.log(peak) / Math.LN10
-    return Math.max(0, Math.min(1, (db + 50) / 50))
+    return Math.max(0, Math.min(1, (db - root.meterFloorDb) / -root.meterFloorDb))
   }
 
   // Strips looked up live from config rather than from the cached models.

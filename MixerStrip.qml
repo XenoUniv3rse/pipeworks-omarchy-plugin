@@ -59,10 +59,10 @@ Rectangle {
   // curve PipeWire uses for volume.
   readonly property real meterPeak: {
     if (root.muted) return 0
-    var raw = peakMonitor.peak || 0
-    if (!root.isOutput) return raw
+    var amplitude = root.model.peakToAmplitude(peakMonitor.peak || 0)
+    if (!root.isOutput) return amplitude
     var fraction = Math.max(0, Math.min(100, root.level)) / 100
-    return raw * fraction * fraction * fraction
+    return amplitude * fraction * fraction * fraction
   }
 
   radius: Math.round(Style.space(10))
