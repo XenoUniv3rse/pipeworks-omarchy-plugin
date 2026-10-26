@@ -31,13 +31,6 @@ output (your default speakers or headphones), your default microphone, and the
 virtual channels — creating those restarts PipeWire once, so audio blips. New
 apps then start in **System**.
 
-To float the window instead of tiling it, in `~/.config/hypr/hyprland.lua`:
-
-```lua
-o.window({ class = "^org\\.quickshell$", title = "^Pipeworks$" }, {
-  float = true, size = "1040 660", center = true,
-})
-```
 
 ## Using it
 
@@ -63,6 +56,15 @@ Strips come in three kinds:
 Level meters go amber at -12 dBFS and red at -3. The bar icon lights up when
 anything is muted; to leave out a strip you keep muted on purpose:
 `omarchy bar set pipeworks.mixer mutedIndicatorIgnore "Roof"`.
+
+### Settings
+
+The ⚙ in the window's header holds what applies to Pipeworks as a whole:
+whether the window opens **floating** (centred, sized for a mixer) or **tiled**
+into your layout, **start on login**, which **control surface** to use, and the
+board's **soft takeover** and **on-screen changes**.
+
+![Settings](docs/screenshots/settings.png)
 
 ### Strip settings
 
@@ -126,8 +128,8 @@ scene recalled from the screen restores everything except levels.
 
 ### Control surface
 
-Pick your board under **Control surface** at the bottom of the window, then use
-**Learn** in any strip's settings and move the control you want. Buttons light
+Pick your board in **Settings** (the ⚙ in the header), then use **Learn** in
+any strip's settings and move the control you want. Buttons light
 their LEDs on boards that have them.
 
 * The ✕ next to a binding clears it. Learning a control that is already bound
@@ -136,10 +138,10 @@ their LEDs on boards that have them.
 * **MIDI-only volume** (the lock in the window header, or the button at the
   bottom of the bar panel) stops software from
   moving levels; faders go dim. Mute, solo and routing still work.
-* **Soft takeover** (on by default): after a level changes on screen, a
+* **Soft takeover** (in Settings, on by default): after a level changes on screen, a
   physical fader does nothing until you bring it to that level, so levels
   never jump.
-* **Show changes on screen** (on by default): the board's moves appear on the
+* **Show changes on screen** (in Settings, on by default): the board's moves appear on the
   shell's OSD — "Music 45%", "Chat muted", or "Game: move up to 70%" for a
   fader waiting to take over.
 
@@ -158,7 +160,7 @@ gdbus call --session --dest io.github.pipeworks.Pipeworks \
 
 | Group | Actions |
 |---|---|
-| Levels and switches | `set-volume (sd)`, `set-output-volume (sd)`, `toggle-mute s`, `toggle-output-mute s`, `toggle-solo s`, `toggle-output-solo s`, `toggle-route (ss)`, `set-volume-lock b`, `toggle-volume-lock`, `set-soft-takeover b`, `set-midi-osd b`, `set-duck (ssd)` |
+| Levels and switches | `set-volume (sd)`, `set-output-volume (sd)`, `toggle-mute s`, `toggle-output-mute s`, `toggle-solo s`, `toggle-output-solo s`, `toggle-route (ss)`, `set-volume-lock b`, `toggle-volume-lock`, `set-soft-takeover b`, `set-midi-osd b`, `set-duck (ssd)`, `set-window-floating b` |
 | Scenes | `save-scene s`, `update-scene s`, `rename-scene (ss)`, `remove-scene s`, `recall-scene s` |
 | Apps | `move-stream (is)`, `set-default-channel s` |
 | Strips | `add-channel s`, `add-input (ss)`, `add-output (ss)`, `remove-strip (ss)`, `rename-strip (sss)`, `retarget-input (ss)`, `retarget-output (ss)` |
@@ -182,7 +184,8 @@ gdbus call --session --dest io.github.pipeworks.Pipeworks \
 
 The window can open straight to a dialog:
 `omarchy-shell shell summon pipeworks.mixer '{"eq":"music"}'` — also
-`{"settings":{"kind":"channel","id":"game"}}` or `{"scene":"new"}`.
+`{"settings":{"kind":"channel","id":"game"}}`, `{"scene":"new"}` or
+`{"preferences":true}`.
 
 ### Files
 
@@ -223,9 +226,11 @@ MixerWindow.qml    the mixer window
 MixerModel.qml     state and actions shared by both
 MixerStrip.qml     one strip as a card          StripGroup.qml   a row of them
 StripSettings.qml  a strip's settings dialog    SceneSettings.qml  a scene's
+GlobalSettings.qml the ⚙ Settings dialog
 EqTuner.qml        the EQ tuner                 EqMath.js        its curve maths
 LearnRow.qml       one MIDI Learn row           AddStrip.qml     add a strip
 daemon/run.py      the daemon                   daemon/spectrum.py  EQ spectrum
+daemon/window_mode.py  floats or tiles the window in Hyprland
 daemon/pipeworks/  mixing, PipeWire, MIDI, effects, EQ, ducking, published state
 ```
 

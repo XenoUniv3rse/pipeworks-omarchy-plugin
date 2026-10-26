@@ -104,6 +104,7 @@ class PipeworksApplication(Gio.Application):
             ("set-midi-port", "s", self._on_set_midi_port),
             ("set-soft-takeover", "b", self._on_set_soft_takeover),
             ("set-midi-osd", "b", self._on_set_midi_osd),
+            ("set-window-floating", "b", self._on_set_window_floating),
             ("set-duck", "(ssd)", self._on_set_duck),
             # Scenes
             ("save-scene", "s", self._on_save_scene),
@@ -224,6 +225,9 @@ class PipeworksApplication(Gio.Application):
         if self._entity("channel", chan_id):
             self._mixer().set_duck(chan_id, trigger, amount)
             self._republish()
+
+    def _on_set_window_floating(self, _action, parameter):
+        self._mixer().set_window_floating(parameter.unpack())
 
     def _on_set_midi_osd(self, _action, parameter):
         self._mixer().set_midi_osd(parameter.unpack())

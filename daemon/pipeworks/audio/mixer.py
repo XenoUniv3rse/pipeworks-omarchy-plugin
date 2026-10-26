@@ -729,6 +729,11 @@ class Mixer:
     def soft_takeover(self):
         return bool(self.config.get("midi_soft_takeover", True))
 
+    def set_window_floating(self, floating):
+        self.config["window_floating"] = bool(floating)
+        self._repository.save(self.config)
+        self.on_state_changed()
+
     def set_midi_osd(self, enabled):
         self.config["midi_osd"] = bool(enabled)
         self._repository.save(self.config)

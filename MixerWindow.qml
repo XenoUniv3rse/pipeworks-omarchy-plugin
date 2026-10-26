@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
@@ -28,6 +29,7 @@ Item {
   //   omarchy-shell shell summon pipeworks.mixer '{"settings":{"kind":"channel","id":"game"}}'
   //   omarchy-shell shell summon pipeworks.mixer '{"scene":"new"}'
   //   omarchy-shell shell summon pipeworks.mixer '{"eq":"music"}'
+  //   omarchy-shell shell summon pipeworks.mixer '{"preferences":true}'
   function open(payloadJson) {
     closingFromHost = false
     window.visible = true
@@ -35,6 +37,7 @@ Item {
     try { payload = JSON.parse(String(payloadJson || "{}")) || ({}) } catch (error) {}
     if (payload.scene) root.openScene(String(payload.scene))
     if (payload.eq) root.openEq(String(payload.eq))
+    if (payload.preferences) { root.closeOverlays(); globalSettings.show() }
     var target = payload.settings
     root.pendingSettings = target && target.kind && target.id ? target : null
     root.openPendingSettings()
@@ -48,19 +51,24 @@ Item {
     return Quickshell.env("HOME") + "/.config/omarchy/plugins/" + id
   }
 
-  function openEq(chanId) {
-    if (!mixer.entityFor("channel", chanId) && !mixer.entityFor("input", chanId)) return
+  // Only one overlay at a time: they share a layer, so opening a second on top
+  // of the first leaves two dialogs stacked with only the upper one reachable.
+  function closeOverlays() {
     settings.close()
     addStrip.close()
     sceneSettings.close()
+    eqTuner.close()
+    globalSettings.close()
+  }
+
+  function openEq(chanId) {
+    if (!mixer.entityFor("channel", chanId) && !mixer.entityFor("input", chanId)) return
+    root.closeOverlays()
     eqTuner.show(chanId)
   }
 
-  // Only one overlay at a time: they share a layer.
   function openScene(sceneId) {
-    settings.close()
-    addStrip.close()
-    eqTuner.close()
+    root.closeOverlays()
     if (sceneId === "new") sceneSettings.showNew()
     else sceneSettings.show(sceneId)
   }
@@ -75,9 +83,7 @@ Item {
     var entity = mixer.entityFor(kind, String(root.pendingSettings.id))
     if (!entity) return
     root.pendingSettings = null
-    addStrip.close()
-    sceneSettings.close()
-    eqTuner.close()
+    root.closeOverlays()
     settings.show(kind, entity)
   }
 
@@ -88,6 +94,24 @@ Item {
   }
 
   readonly property bool opened: window.visible
+
+  // Floating or tiled, as chosen in Settings. Hyprland decides that for a new
+  // window, so it is applied each time the window opens and whenever the
+  // setting changes - daemon/window_mode.py does the asking.
+  function applyWindowMode() {
+    if (!window.visible) return
+    windowMode.command = ["/usr/bin/python3", "-B", root.pluginDir + "/daemon/window_mode.py",
+                          mixer.windowFloating ? "floating" : "tiled"]
+    windowMode.running = false
+    windowMode.running = true
+  }
+
+  Process { id: windowMode }
+
+  Connections {
+    target: mixer
+    function onWindowFloatingChanged() { root.applyWindowMode() }
+  }
 
   MixerModel {
     id: mixer
@@ -130,6 +154,7 @@ Item {
     visible: false
 
     onVisibleChanged: {
+      if (visible) root.applyWindowMode()
       if (!visible && !root.closingFromHost && root.shell
           && typeof root.shell.hide === "function")
         root.shell.hide("pipeworks.mixer")
@@ -210,7 +235,19 @@ Item {
               // Only one overlay at a time: they share a layer, so opening the
               // second on top of the first leaves two dialogs stacked with only
               // the upper one reachable.
-              onClicked: { settings.close(); sceneSettings.close(); eqTuner.close(); addStrip.show() }
+              onClicked: { root.closeOverlays(); addStrip.show() }
+            }
+
+            Button {
+              // md-cog (U+F0493)
+              iconText: "\u{f0493}"
+              iconSize: Style.font.body
+              horizontalPadding: Style.space(6)
+              bordered: true
+              foreground: Util.alpha(Color.foreground, 0.7)
+              fontFamily: Style.font.family
+              tooltipText: "Settings: window, start on login, control surface"
+              onClicked: { root.closeOverlays(); globalSettings.show() }
             }
           }
         }
@@ -374,9 +411,7 @@ Item {
               Layout.alignment: Qt.AlignTop
               onEqRequested: function (entity) { root.openEq(String(entity.id)) }
               onSettingsRequested: function (kind, entity) {
-                addStrip.close()
-                sceneSettings.close()
-                eqTuner.close()
+                root.closeOverlays()
                 settings.show(kind, entity)
               }
             }
@@ -391,9 +426,7 @@ Item {
               Layout.alignment: Qt.AlignTop
               onEqRequested: function (entity) { root.openEq(String(entity.id)) }
               onSettingsRequested: function (kind, entity) {
-                addStrip.close()
-                sceneSettings.close()
-                eqTuner.close()
+                root.closeOverlays()
                 settings.show(kind, entity)
               }
             }
@@ -407,174 +440,13 @@ Item {
               Layout.fillHeight: true
               Layout.alignment: Qt.AlignTop
               onSettingsRequested: function (kind, entity) {
-                addStrip.close()
-                sceneSettings.close()
-                eqTuner.close()
+                root.closeOverlays()
                 settings.show(kind, entity)
               }
             }
           }
         }
 
-        Rectangle {
-          Layout.fillWidth: true
-          Layout.preferredHeight: 1
-          color: Util.alpha(Color.foreground, 0.09)
-        }
-
-        // ------------------------------------------------------------ footer
-
-        Toggle {
-          Layout.fillWidth: true
-          Layout.margins: Style.space(12)
-          label: "Start on login"
-          description: String(mixer.autostart.description || "")
-          checked: mixer.autostart.enabled === true
-          // Not every strategy is ours to change: when the shell supervises the
-          // daemon it reports that rather than offering a switch that lies.
-          enabled: mixer.autostart.canToggle !== false
-          opacity: enabled ? 1.0 : 0.55
-          fontFamily: Style.font.family
-          onClicked: if (enabled) mixer.setAutostart(!checked)
-        }
-
-        ColumnLayout {
-          id: midiSection
-          Layout.fillWidth: true
-          Layout.margins: Style.space(12)
-          spacing: Style.space(4)
-
-          // The stored match is a substring, matched the same way the daemon
-          // matches it (containment, not equality) - a legacy short match like
-          // "SMC-Mixer-Private" is genuinely connected even though it is not
-          // equal to the full name "SINCO:SINCO SMC-Mixer-Private" that
-          // probing reports. Resolving it to that full name here is what lets
-          // the dropdown highlight the right row instead of showing nothing
-          // selected on an already-working setup.
-          readonly property string resolvedPort: {
-            for (var i = 0; i < mixer.midiPorts.length; i++) {
-              if (mixer.midiPortMatch !== ""
-                  && mixer.midiPorts[i].indexOf(mixer.midiPortMatch) !== -1)
-                return mixer.midiPorts[i]
-            }
-            return mixer.midiPortMatch
-          }
-
-          // Every board ALSA can currently see, plus whatever is configured
-          // even if it is not detected right now - unplugged rather than
-          // unconfigured are different situations and both deserve to be
-          // visible instead of one silently swallowing the other.
-          readonly property var midiOptions: {
-            var options = []
-            for (var i = 0; i < mixer.midiPorts.length; i++)
-              options.push({ value: mixer.midiPorts[i], label: mixer.midiPorts[i] })
-            if (mixer.midiPortMatch !== "" && mixer.midiPorts.indexOf(midiSection.resolvedPort) === -1) {
-              options.push({
-                value: mixer.midiPortMatch,
-                label: mixer.midiPortMatch + " (not detected)"
-              })
-            }
-            return options
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(6)
-
-            Text {
-              text: "Control surface"
-              color: Color.foreground
-              font.family: Style.font.family
-              font.pixelSize: Style.font.body
-            }
-
-            // The theme has no "good" token, only foreground/accent/urgent/muted -
-            // this reuses the meter's own green so connected doesn't invent a
-            // colour found nowhere else in the plugin.
-            Rectangle {
-              width: Style.space(6)
-              height: Style.space(6)
-              radius: width / 2
-              color: mixer.midiConnected ? Qt.rgba(0.35, 0.80, 0.40, 1) : Color.urgent
-            }
-          }
-
-          Dropdown {
-            visible: midiSection.midiOptions.length > 0
-            Layout.fillWidth: true
-            showLabel: false
-            options: midiSection.midiOptions
-            value: midiSection.resolvedPort
-            fontFamily: Style.font.family
-            // Selecting a listed device stores its full name, replacing
-            // whatever match was configured before - so picking a device once
-            // is also how an old short match upgrades to an exact one.
-            onChanged: function (value) { mixer.setMidiPort(value) }
-          }
-
-          Text {
-            visible: midiSection.midiOptions.length === 0
-            Layout.fillWidth: true
-            text: "No MIDI device detected. Plug in your board to select it."
-            color: Color.urgent
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
-
-          // fillHeight off explicitly: a layout nested in a layout defaults it
-          // to true, and this row then took the whole window from the strips.
-          // Its switches fill the row's own height, so the pair stay equal.
-          RowLayout {
-            id: midiToggles
-            Layout.fillWidth: true
-            Layout.fillHeight: false
-            Layout.topMargin: Style.space(4)
-            spacing: Style.space(8)
-
-            Toggle {
-              Layout.fillWidth: true
-              Layout.preferredWidth: 1
-              Layout.fillHeight: true
-              label: "Soft takeover"
-              description: "After a level changes in software, a fader takes over again only once it is brought to that level, so nothing jumps."
-              checked: mixer.softTakeover
-              fontFamily: Style.font.family
-              onClicked: mixer.setSoftTakeover(!checked)
-            }
-
-            Toggle {
-              Layout.fillWidth: true
-              Layout.preferredWidth: 1
-              Layout.fillHeight: true
-              label: "Show changes on screen"
-              description: "Faders and buttons on the board show what they changed on the shell's OSD."
-              checked: mixer.midiOsd
-              fontFamily: Style.font.family
-              onClicked: mixer.setMidiOsd(!checked)
-            }
-          }
-        }
-
-        // The dropdown above is the last thing in this ColumnLayout, and its
-        // popup renders below the trigger inside the window's own surface -
-        // there being nothing after it here means nothing else is holding the
-        // window's bottom edge below where that popup draws, on ANY window
-        // height. This is exactly that room, sized for the popup at its
-        // internal 8-row cap so it stays enough even as more devices are
-        // plugged in.
-        //
-        // The switches sit below the dropdown, and the popup may draw over
-        // them, so their height counts towards that room.
-        Item {
-          Layout.fillWidth: true
-          Layout.preferredHeight: midiSection.midiOptions.length > 0
-            ? Math.max(0, Style.spacing.popupRowHeight * Math.min(midiSection.midiOptions.length, 8)
-              + Style.spacing.labelGap * (Math.min(midiSection.midiOptions.length, 8) - 1)
-              + Style.space(16)
-              - midiToggles.height - Style.space(4) - Style.space(12))
-            : 0
-        }
       }
 
       // Chips are reparented here while being dragged, so they float above
@@ -609,6 +481,12 @@ Item {
         id: settings
         model: mixer
         notice: root.statusText
+        z: 100
+      }
+
+      GlobalSettings {
+        id: globalSettings
+        model: mixer
         z: 100
       }
     }

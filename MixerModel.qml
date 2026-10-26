@@ -52,6 +52,7 @@ QtObject {
   // On unless explicitly switched off, matching the daemon's default.
   readonly property bool softTakeover: config.midi_soft_takeover !== false
   readonly property bool midiOsd: config.midi_osd !== false
+  readonly property bool windowFloating: config.window_floating !== false
 
   readonly property var streams: state.streams instanceof Array ? state.streams : []
   readonly property var outputDevices: state.devices && state.devices.outputs instanceof Array
@@ -667,6 +668,10 @@ QtObject {
 
   function setAutostart(enabled) {
     root.activate("set-autostart", "[<" + (enabled ? "true" : "false") + ">]")
+  }
+
+  function setWindowFloating(floating) {
+    root.activate("set-window-floating", "[<" + (floating ? "true" : "false") + ">]")
   }
 
   function setMidiOsd(enabled) {

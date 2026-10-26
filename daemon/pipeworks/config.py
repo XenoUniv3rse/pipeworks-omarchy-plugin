@@ -84,6 +84,9 @@ DEFAULT_CONFIG = {
     "midi_soft_takeover": True,
     # Show what the control surface just changed on the shell's OSD.
     "midi_osd": True,
+    # Whether the mixer window opens floating (centred, at a mixer's size) or
+    # is left to Hyprland to tile like any other window.
+    "window_floating": True,
     # Physical output state, independent of any channel.
     "output_volume": {"master": 100, "speakers": 100},
     "output_muted": {"master": False, "speakers": False},
