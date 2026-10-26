@@ -207,6 +207,20 @@ BarWidget {
   readonly property string installCommand: "sudo pacman -S --needed " + root.missingPackages.join(" ")
   property bool installCopied: false
 
+  // Why the check says each package is missing, and which Python it asked.
+  // A package that is installed but still reported is nearly always being
+  // looked for by a different interpreter than the one pacman installed it
+  // for, and this is what makes that visible.
+  readonly property string dependencyDetail: {
+    if (!root.service) return ""
+    var errors = root.service.dependencyErrors || ({})
+    var lines = []
+    for (var name in errors) lines.push((name === "python3" ? "python" : name) + ": " + errors[name])
+    if (root.service.dependencyPython) lines.push("Checked with " + root.service.dependencyPython + ".")
+    lines.push("Checking again every 10 seconds.")
+    return lines.join("\n")
+  }
+
   function copyInstallCommand() {
     // Passed as an argument, not through a shell: nothing to quote.
     copier.command = ["wl-copy", "--", root.installCommand]
@@ -349,6 +363,7 @@ BarWidget {
             }
 
             Button {
+              id: copyButton
               text: root.installCopied ? "Copied" : "Copy"
               // md-content_copy (U+F018F) / md-check (U+F012C)
               iconText: root.installCopied ? "\u{f012c}" : "\u{f018f}"
@@ -359,6 +374,41 @@ BarWidget {
               fontFamily: root.fontFamily
               tooltipText: "Copy the install command to paste into a terminal"
               onClicked: root.copyInstallCommand()
+            }
+          }
+
+          // Installed them? This checks again - it also does so by itself
+          // every ten seconds while anything is missing, and starts the mixer
+          // as soon as nothing is.
+          RowLayout {
+            visible: !mixer.available && !!root.service && root.service.dependenciesChecked
+              && !root.service.dependenciesOk
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            spacing: Style.space(6)
+
+            Text {
+              Layout.fillWidth: true
+              text: root.dependencyDetail
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
+            }
+
+            Button {
+              readonly property bool checking: !!root.service && root.service.checkingDependencies
+              text: checking ? "Checking…" : "Check again"
+              // md-refresh (U+F0450)
+              iconText: "\u{f0450}"
+              iconSize: Style.font.bodySmall
+              fontSize: Style.font.bodySmall
+              bordered: true
+              enabled: !checking
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              tooltipText: "Check for the packages again, after installing them"
+              onClicked: root.service.checkDependencies()
             }
           }
 

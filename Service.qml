@@ -58,7 +58,19 @@ Item {
   property bool dependenciesChecked: false
   property var missingDependencies: []
   readonly property bool dependenciesOk: dependenciesChecked && missingDependencies.length === 0
+  // Why each one counted as missing, and which interpreter was asked - so a
+  // package that is installed but still reported missing can be explained.
+  property var dependencyErrors: ({})
+  property string dependencyPython: ""
+  readonly property bool checkingDependencies: dependencyCheck.running
   property string lastError: ""
+
+  // The interpreter for the daemon, its dependency check and the spectrum
+  // helper. The system one, by path: pacman installs python-gobject and
+  // python-rtmidi for /usr/bin/python3, and a "python3" first on PATH - from
+  // mise, pyenv, a venv or conda - would not see them however often they
+  // were installed.
+  readonly property string python: "/usr/bin/python3"
 
   readonly property string statusSummary: {
     if (!dependenciesChecked) return "Checking dependencies..."
@@ -78,40 +90,65 @@ Item {
 
   // The daemon is only useful with its Python dependencies present, and a
   // missing one otherwise shows up as an unexplained failure to start.
+  //
+  // Run again on request and every few seconds while something is missing:
+  // it used to run once, at shell start, so installing the packages changed
+  // nothing until the shell was restarted.
   function checkDependencies() {
-    dependencyCheck.running = true
+    if (!dependencyCheck.running) dependencyCheck.running = true
+  }
+
+  Timer {
+    interval: 10000
+    repeat: true
+    running: root.dependenciesChecked && !root.dependenciesOk
+    onTriggered: root.checkDependencies()
   }
 
   Process {
     id: dependencyCheck
-    command: ["python3", "-c",
-      "import sys\n" +
-      "missing = []\n" +
-      "try:\n" +
+    command: [root.python, "-c",
+      "import json, sys\n" +
+      "missing, errors = [], {}\n" +
+      "def need(package, attempt):\n" +
+      "    try:\n" +
+      "        attempt()\n" +
+      "    except Exception as error:\n" +
+      "        missing.append(package)\n" +
+      "        errors[package] = f'{type(error).__name__}: {error}'\n" +
+      "def gi_check():\n" +
       "    from gi.repository import Gio, GLib\n" +
-      "except Exception:\n" +
-      "    missing.append('python-gobject')\n" +
-      "try:\n" +
+      "def rtmidi_check():\n" +
       "    import rtmidi\n" +
-      "except Exception:\n" +
-      "    missing.append('python-rtmidi')\n" +
-      "print(','.join(missing))\n"
+      "need('python-gobject', gi_check)\n" +
+      "need('python-rtmidi', rtmidi_check)\n" +
+      "print(json.dumps({'missing': missing, 'errors': errors,\n" +
+      "                  'python': sys.executable + ' ' + sys.version.split()[0]}))\n"
     ]
     stdout: StdioCollector {
+      id: dependencyOutput
       waitForEnd: true
-      onStreamFinished: {
-        var raw = String(text || "").trim()
-        root.missingDependencies = raw === "" ? [] : raw.split(",")
-        root.dependenciesChecked = true
-        if (!root.dependenciesOk) {
-          console.warn("pipeworks: missing dependencies: " + root.missingDependencies.join(", "))
-        }
-      }
     }
     onExited: function(exitCode) {
-      if (exitCode !== 0 && !root.dependenciesChecked) {
+      var result = null
+      try { result = JSON.parse(String(dependencyOutput.text || "").trim()) } catch (error) {}
+      if (exitCode !== 0 || !result) {
+        // The interpreter itself would not run.
         root.missingDependencies = ["python3"]
-        root.dependenciesChecked = true
+        root.dependencyErrors = ({ python3: root.python + " could not be run (exit " + exitCode + ")" })
+        root.dependencyPython = root.python
+      } else {
+        root.missingDependencies = result.missing || []
+        root.dependencyErrors = result.errors || ({})
+        root.dependencyPython = String(result.python || "")
+      }
+      root.dependenciesChecked = true
+      if (!root.dependenciesOk) {
+        console.warn("pipeworks: missing dependencies: " + root.missingDependencies.join(", ")
+          + " (" + root.dependencyPython + ")")
+      } else if (!root.daemonRunning) {
+        // Do not wait for the next liveness tick to start it.
+        probe.restart()
       }
     }
   }
@@ -144,7 +181,7 @@ Item {
 
   function startDaemon() {
     if (launcher === "" || daemon.running) return
-    daemon.command = ["python3", "-X", "pycache_prefix=" + root.pycachePrefix, root.launcher, "--daemon"]
+    daemon.command = [root.python, "-X", "pycache_prefix=" + root.pycachePrefix, root.launcher, "--daemon"]
     daemon.running = true
   }
 
@@ -200,5 +237,6 @@ Item {
     target: "pipeworks.mixer.service"
     function restart(): string { root.restartDaemon(); return "ok" }
     function status(): string { return root.statusSummary }
+    function recheck(): string { root.checkDependencies(); return "checking" }
   }
 }

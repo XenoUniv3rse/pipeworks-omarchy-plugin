@@ -273,7 +273,9 @@ Item {
   Process {
     id: spectrum
     running: root.spectrumWanted
-    command: ["python3", "-B", root.spectrumScript, root.spectrumSink, "120", "30"]
+    // The system interpreter, where pacman's python-numpy lives - see
+    // Service.qml's python property for why not whatever is on PATH.
+    command: ["/usr/bin/python3", "-B", root.spectrumScript, root.spectrumSink, "120", "30"]
     // A helper that dies straight away is almost always numpy missing; say
     // so instead of leaving an empty graph.
     stderr: StdioCollector { id: spectrumErrors; waitForEnd: true }
