@@ -55,14 +55,18 @@ Item {
   readonly property bool keyboard: root.model.controlSurface === "keyboard"
 
   // The keyboard first: on a laptop it is usually the only choice there is.
+  // Only what can be chosen right now: the keyboard, and the boards ALSA can
+  // see. A saved board that is not plugged in is not offered - it is said
+  // below the list instead, so it neither looks selectable nor goes unsaid.
   readonly property var midiOptions: {
     var options = [{ value: "keyboard", label: "Keyboard (volume keys)" }]
     for (var i = 0; i < root.model.midiPorts.length; i++)
       options.push({ value: root.model.midiPorts[i], label: root.model.midiPorts[i] })
-    if (root.model.midiPortMatch !== "" && root.model.midiPorts.indexOf(root.resolvedPort) === -1)
-      options.push({ value: root.model.midiPortMatch, label: root.model.midiPortMatch + " (not detected)" })
     return options
   }
+
+  // Whether the saved board is one of those detected.
+  readonly property bool boardDetected: root.model.midiPorts.indexOf(root.resolvedPort) !== -1
 
   MouseArea {
     anchors.fill: parent
@@ -192,7 +196,7 @@ Item {
           Layout.fillWidth: true
           showLabel: false
           options: root.midiOptions
-          value: root.keyboard ? "keyboard" : root.resolvedPort
+          value: root.keyboard ? "keyboard" : (root.boardDetected ? root.resolvedPort : "")
           fontFamily: Style.font.family
           // Selecting a listed board stores its full name, replacing whatever
           // match was configured before - so picking a board once is also how
@@ -204,9 +208,14 @@ Item {
         }
 
         Text {
-          visible: !root.keyboard && root.model.midiPorts.length === 0
+          visible: !root.keyboard && !root.boardDetected
           Layout.fillWidth: true
-          text: "No MIDI board detected. Plug one in, or choose Keyboard to use the volume keys."
+          text: (root.model.midiPortMatch !== ""
+                  ? root.model.midiPortMatch + " is not connected. "
+                  : "No MIDI board selected. ")
+            + (root.model.midiPorts.length === 0
+                  ? "Plug it in, or choose Keyboard to use the volume keys."
+                  : "Plug it in, or choose another board or Keyboard above.")
           color: Color.urgent
           font.family: Style.font.family
           font.pixelSize: Style.font.caption

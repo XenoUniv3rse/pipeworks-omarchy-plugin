@@ -19,7 +19,7 @@ from .audio.metering import clear_stale_meters
 from .audio.mixer import Mixer
 from .config import ConfigRepository
 from .midi.bindings import MidiBindings, binding_channel
-from .midi.controller import MidiController, MidiPortsNotFound, NullMidiController
+from .midi.controller import MidiController, MidiPortsNotFound, NullMidiController, probe_ports
 from .keyboard import FINE_STEP, STEP, KeyboardControl
 from .osd import OsdNotifier, describe_surface_change
 from .pipewire.backend import PipeWireBackend
@@ -33,7 +33,7 @@ from .pipewire.streams import StreamRouter
 from .runner import CommandRunner
 
 
-def fit_defaults_to_machine(config, devices, ports):
+def fit_defaults_to_machine(config, devices, ports, boards=()):
     """Points a first-run config at this machine's own devices.
 
     The built-in defaults name one particular desktop's headset, speakers and
@@ -69,6 +69,16 @@ def fit_defaults_to_machine(config, devices, ports):
     for inp in config["inputs"]:
         config["routes"][inp["id"]] = {out_id: False for out_id in output_ids}
 
+    # No board plugged in - a laptop, typically - means the volume keys are
+    # the control surface to start with, on the first output. Otherwise they
+    # would keep changing the default sink, which is now a channel, behind
+    # the mixer's back.
+    if not boards:
+        config["control_surface"] = "keyboard"
+        config["keyboard_target"] = ""
+    elif not any(config.get("midi_port_match", "") in board for board in boards):
+        config["midi_port_match"] = boards[0]
+
 
 def _glib_scheduler(delay_ms, callback):
     """One-shot deferral, so the domain layer never imports GLib itself."""
@@ -95,7 +105,7 @@ class MixerService:
         # its devices are someone's real setup.
         self.first_run = not self.repository.exists() and self.repository.legacy_source() is None
         if self.first_run:
-            fit_defaults_to_machine(self.config, self.devices, ports)
+            fit_defaults_to_machine(self.config, self.devices, ports, self._detected_boards())
             self.repository.save(self.config)
 
         self.backend = PipeWireBackend(
@@ -125,6 +135,13 @@ class MixerService:
         self._watch_expiry = 0
 
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detected_boards():
+        try:
+            return probe_ports()
+        except Exception:
+            return []
 
     def _open_control_surface(self, port_match=None):
         # With the keyboard as the control surface no board is opened: the
