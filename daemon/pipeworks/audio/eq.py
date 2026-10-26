@@ -1,8 +1,10 @@
-"""The per-channel parametric equaliser.
+"""The parametric equaliser for channels and inputs.
 
-Every channel can carry an EQ of up to MAX_BANDS bands plus a preamp. It runs
-as that channel's own filter chain, sitting between the channel's loopback and
-the outputs it is routed to, so it shapes the channel wherever it plays.
+Every channel and every input can carry an EQ of up to MAX_BANDS bands plus a
+preamp. A channel's runs as its own filter chain, between the channel's
+loopback and the outputs it is routed to, so it shapes the channel wherever it
+plays. An input's is appended to the input's effects chain - after noise
+suppression, the gate and the rest - so it is in what apps record.
 
 A band is one PipeWire builtin biquad. Their frequency, gain and Q are live
 controls on the running chain, so dragging a band is heard as it moves; only
@@ -100,6 +102,14 @@ PRESETS = [
         _band("highpass", 80, q=0.7), _band("lowshelf", 150, -6.0, 0.7),
         _band("peaking", 2500, 2.0, 0.8), _band("peaking", 4000, 0.0),
         _band("highshelf", 9000, -3.0, 0.7)]},
+    {"id": "broadcast", "label": "Broadcast voice", "preamp": -3.0, "bands": [
+        _band("highpass", 80, q=0.7), _band("peaking", 160, 2.0, 1.0),
+        _band("peaking", 350, -3.0, 1.2), _band("peaking", 4000, 3.0, 1.0),
+        _band("peaking", 7500, -2.5, 3.0), _band("highshelf", 12000, 2.0, 0.7)]},
+    {"id": "rumble", "label": "Remove rumble & hum", "preamp": 0.0, "bands": [
+        _band("highpass", 100, q=0.7), _band("notch", 50, q=8.0),
+        _band("notch", 100, q=8.0), _band("peaking", 250, -2.0, 1.0),
+        _band("highshelf", 10000, 0.0, 0.7)]},
     {"id": "warm", "label": "Warm", "preamp": -3.0, "bands": [
         _band("lowshelf", 200, 3.0, 0.7), _band("peaking", 500, 1.0, 0.8),
         _band("peaking", 3000, -1.5, 1.0), _band("peaking", 4000, 0.0),
@@ -202,6 +212,16 @@ def build_graph(eq):
         for a, b in zip(nodes, nodes[1:])
     ]
     return nodes, links
+
+
+def append_to(nodes, links, eq):
+    """An existing chain's (nodes, links) with this EQ added at its end."""
+    eq_nodes, eq_links = build_graph(eq)
+    joined = list(links) + eq_links
+    if nodes:
+        tail = nodes[-1]
+        joined.append((tail["name"], tail["out_port"], eq_nodes[0]["name"], eq_nodes[0]["in_port"]))
+    return list(nodes) + eq_nodes, joined
 
 
 def graph_io(nodes):

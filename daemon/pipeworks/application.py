@@ -392,7 +392,8 @@ class PipeworksApplication(Gio.Application):
     def _on_set_eq(self, _action, parameter):
         chan_id, raw = parameter.unpack()
         settings_ = self._parse_eq(raw)
-        if settings_ is not None and self._entity("channel", chan_id):
+        if settings_ is not None and (self._entity("channel", chan_id)
+                                      or self._entity("input", chan_id)):
             self._mixer().set_eq(chan_id, settings_)
 
     def _on_save_eq_preset(self, _action, parameter):

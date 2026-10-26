@@ -142,8 +142,8 @@ key.
 
 ## EQ
 
-Every channel card has an **EQ** button, lit while that channel's EQ is on. It
-opens the tuner:
+Every channel and every input has an **EQ** button beside its settings cog,
+lit while that strip's EQ is on. It opens the tuner:
 
 * **The curve.** Drag a numbered handle to move a band in frequency and gain,
   scroll over it to make it wider or narrower (Q), right-click it to switch it
@@ -158,17 +158,27 @@ opens the tuner:
   channel's colour after it. **Tilt** leans it 3 dB per octave so a balanced
   mix reads level. The scale on the right is dBFS.
 * **Presets.** Flat, Bass boost, Bass cut, Treble boost, Loudness, Vocal
-  clarity, Podcast, Gaming footsteps, Cinema, Night mode, Warm and Bright, plus
-  any you save yourself (marked ★, deletable). The picker shows which preset
+  clarity, Podcast, Gaming footsteps, Cinema, Night mode, Broadcast voice,
+  Remove rumble & hum, Warm and Bright, plus any you save yourself (marked ★,
+  deletable). The picker shows which preset
   the EQ currently matches, or Custom.
 * **Preamp.** Boosting can clip. The tuner shows the curve's highest point and
   warns when it is above 0 dB; **Auto** lowers the preamp until it is not.
 * **On / Bypassed** compares against the untouched sound.
 
 Each channel's EQ is its own filter chain between the channel and its outputs,
-so it shapes that channel wherever it is routed. Moving a band is applied live,
+so it shapes that channel wherever it is routed. An input's EQ is added to the
+end of the input's effects chain - after noise suppression, the gate, the
+compressor and the rest - so it is part of what Discord or OBS records, and
+what you hear when monitoring.
+
+For a channel the spectrum is captured before the EQ; for an input it is
+captured after everything, from the virtual microphone itself, because that is
+what apps receive. Either way the other trace is that capture with the curve
+added or taken away, which for an EQ is exact. Moving a band is applied live,
 without a sound; changing a band's type, switching a band on or off, or
-bypassing restarts that one channel's chain, which is a brief blip.
+bypassing restarts that one strip's chain, which is a brief blip - on an input,
+its effects restart with it.
 
 The curve is computed from the same filter formulas PipeWire uses - checked
 against measured impulse responses of the real filters - so it is what you
@@ -317,9 +327,9 @@ name or its id.
   high-pass, gate, compressor, three-band tone and reverb, switched on
   individually and adjusted while you listen. Switching one on briefly
   interrupts that strip; moving a control does not.
-* **Channel EQ** — a parametric equaliser on every channel, each tuned
-  independently: up to ten bands of seven types, a preamp, presets of its own
-  and yours, and a live spectrum of what the channel is playing.
+* **EQ** — a parametric equaliser on every channel and every microphone
+  input, each tuned independently: up to ten bands of seven types, a preamp,
+  presets of its own and yours, and a live spectrum.
 * **Output effects** — high-pass, compressor, three-band tone and a limiter on
   any physical output, processing everything played through that device. Tune
   the room speakers differently from the headset, or keep a ceiling on both.
@@ -351,7 +361,7 @@ AppChip.qml        a running application, draggable between channels
 StripSettings.qml  rename, device, microphones, effects, MIDI Learn, remove
 SceneSettings.qml  save, rename, update, bind and delete a scene
 LearnRow.qml       one MIDI Learn row, shared by both dialogs
-EqTuner.qml        a channel's EQ: curve, bands, spectrum, presets
+EqTuner.qml        a channel's or input's EQ: curve, bands, spectrum, presets
 EqMath.js          the EQ's frequency response, for drawing it
 AddStrip.qml       add a channel, input or output
 daemon/            the audio brain — no window, no toolkit

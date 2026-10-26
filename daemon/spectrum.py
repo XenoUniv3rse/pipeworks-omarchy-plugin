@@ -32,6 +32,15 @@ FLOOR_DB = -100.0
 RELEASE_DB_PER_S = 40.0  # how fast a band falls after a peak
 
 
+def _sink_exists(name):
+    try:
+        listing = subprocess.run(["pactl", "list", "sinks", "short"],
+                                 capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return True  # cannot tell; let pw-record try
+    return any(line.split("\t")[1:2] == [name] for line in listing.splitlines())
+
+
 def band_edges(count, low=20.0, high=20000.0):
     centres = np.geomspace(low, high, count)
     ratio = (high / low) ** (1 / (count - 1))
@@ -45,6 +54,11 @@ def main():
         print("usage: spectrum.py <sink-name> [bins] [fps]", file=sys.stderr)
         return 2
     sink = sys.argv[1]
+    # pw-record treats a target it cannot find as "any", and quietly records
+    # the default output instead - a spectrum of the wrong thing entirely.
+    if not sink or sink in ("undefined", "null") or not _sink_exists(sink):
+        print(f"spectrum.py: no sink named {sink!r}", file=sys.stderr)
+        return 2
     bins = int(sys.argv[2]) if len(sys.argv) > 2 else 96
     fps = float(sys.argv[3]) if len(sys.argv) > 3 else 30.0
     hop = int(RATE / fps)

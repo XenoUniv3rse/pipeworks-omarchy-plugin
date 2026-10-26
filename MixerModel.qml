@@ -535,16 +535,16 @@ QtObject {
     ]
   }
 
-  // A channel's EQ as a fresh object the caller may edit. Off and flat for a
-  // channel that never had one.
+  // A channel's or input's EQ as a fresh object the caller may edit. Off and
+  // flat for one that never had an EQ.
   function eqFor(chanId) {
-    var entity = root.entityFor("channel", chanId)
+    var entity = root.entityFor("channel", chanId) || root.entityFor("input", chanId)
     if (entity && entity.eq) return JSON.parse(JSON.stringify(entity.eq))
     return { enabled: false, preamp: 0, bands: root.flatBands() }
   }
 
   function eqEnabled(chanId) {
-    var entity = root.entityFor("channel", chanId)
+    var entity = root.entityFor("channel", chanId) || root.entityFor("input", chanId)
     return !!(entity && entity.eq && entity.eq.enabled)
   }
 

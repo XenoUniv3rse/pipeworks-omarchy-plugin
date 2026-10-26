@@ -49,7 +49,7 @@ Item {
   }
 
   function openEq(chanId) {
-    if (!mixer.entityFor("channel", chanId)) return
+    if (!mixer.entityFor("channel", chanId) && !mixer.entityFor("input", chanId)) return
     settings.close()
     addStrip.close()
     sceneSettings.close()
@@ -372,6 +372,7 @@ Item {
               dragLayer: dragLayer
               Layout.fillHeight: true
               Layout.alignment: Qt.AlignTop
+              onEqRequested: function (entity) { root.openEq(String(entity.id)) }
               onSettingsRequested: function (kind, entity) {
                 addStrip.close()
                 sceneSettings.close()

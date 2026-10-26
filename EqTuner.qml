@@ -23,12 +23,30 @@ Item {
   // where the plugin lives.
   property string spectrumScript: ""
 
+  // The strip being tuned: a channel or an input. Ids are unique across
+  // kinds, so the id alone says which.
   property string chanId: ""
   readonly property bool open: root.chanId !== ""
-  readonly property var channel: root.open ? root.model.entityFor("channel", root.chanId) : null
+  readonly property bool isInput: root.open && !!root.model.entityFor("input", root.chanId)
+  readonly property var channel: root.open
+    ? (root.model.entityFor("channel", root.chanId) || root.model.entityFor("input", root.chanId)) : null
   readonly property string channelLabel: root.channel ? String(root.channel.label || root.chanId) : ""
-  readonly property color accent: root.open
+  // Channels have colours of their own; inputs use the theme's accent, as on
+  // their cards.
+  readonly property color accent: root.open && !root.isInput
     ? root.model.accentFor(root.model.channelIndex(root.chanId)) : Color.accent
+  // The sink the spectrum listens to. A channel's sink carries its audio
+  // before the EQ; an input's carries it after everything - effects and EQ -
+  // because the chain plays into it. That is what an app recording the
+  // input receives, so it is the honest thing to show, and the "before" is
+  // worked back from it instead.
+  //
+  // Read from the strip itself - an input has target_sink, a channel sink -
+  // not via isInput: the two bindings update in no particular order, and the
+  // helper was once started with whichever answer came first.
+  readonly property string spectrumSink: root.channel
+    ? String(root.channel.target_sink || root.channel.sink || "") : ""
+  readonly property bool spectrumIsAfter: root.isInput
 
   // The EQ being edited, and a counter bumped on every change so bindings
   // and the canvas know to look again - a JS object mutated in place does not
@@ -254,8 +272,8 @@ Item {
 
   Process {
     id: spectrum
-    running: root.open && root.spectrumOn && root.spectrumScript !== "" && !!root.channel
-    command: ["python3", "-B", root.spectrumScript, root.channel ? String(root.channel.sink) : "", "120", "30"]
+    running: root.spectrumWanted
+    command: ["python3", "-B", root.spectrumScript, root.spectrumSink, "120", "30"]
     // A helper that dies straight away is almost always numpy missing; say
     // so instead of leaving an empty graph.
     stderr: StdioCollector { id: spectrumErrors; waitForEnd: true }
@@ -279,6 +297,18 @@ Item {
       }
     }
   }
+
+  // A running Process does not pick up a new command, so a change of sink
+  // (another strip opened while this one's spectrum runs) restarts it.
+  onSpectrumSinkChanged: {
+    root.spectrumLevels = []
+    if (spectrum.running) {
+      spectrum.running = false
+      Qt.callLater(function () { spectrum.running = Qt.binding(function () { return root.spectrumWanted }) })
+    }
+  }
+  readonly property bool spectrumWanted: root.open && root.spectrumOn
+    && root.spectrumScript !== "" && root.spectrumSink !== ""
 
   onRevisionChanged: graph.requestPaint()
   onHoveredChanged: graph.requestPaint()
@@ -578,9 +608,22 @@ Item {
               var tilt = function (f, level) {
                 return root.spectrumTilt && level > -99 ? 3 * Math.log(f / 1000) / Math.LN2 : 0
               }
+              // A channel is captured before its EQ and an input after it;
+              // either way the other side is the capture plus or minus the
+              // curve, since an EQ is exactly that change.
+              var before = [], after = []
+              for (var k = 0; k < sf.length; k++) {
+                var shift = through ? through[k] : 0
+                // Working back from silence would invent sound: where a cut
+                // has pushed the capture to the floor, "before" is unknown
+                // rather than the floor plus the cut, so it stays there too.
+                before.push(root.spectrumIsAfter
+                  ? (levels[k] > -95 ? levels[k] - shift : levels[k]) : levels[k])
+                after.push(root.spectrumIsAfter ? levels[k] : levels[k] + shift)
+              }
               ctx.beginPath()
               ctx.moveTo(xOf(sf[0]), padTop + plotH)
-              for (var s = 0; s < sf.length; s++) ctx.lineTo(xOf(sf[s]), yOfLevel(levels[s] + tilt(sf[s], levels[s])))
+              for (var s = 0; s < sf.length; s++) ctx.lineTo(xOf(sf[s]), yOfLevel(before[s] + tilt(sf[s], levels[s])))
               ctx.lineTo(xOf(sf[sf.length - 1]), padTop + plotH)
               ctx.closePath()
               ctx.fillStyle = rgba(fg, 0.08)
@@ -588,7 +631,7 @@ Item {
               if (through) {
                 ctx.beginPath()
                 for (var o = 0; o < sf.length; o++) {
-                  var oy = yOfLevel(levels[o] + through[o] + tilt(sf[o], levels[o]))
+                  var oy = yOfLevel(after[o] + tilt(sf[o], levels[o]))
                   if (o === 0) ctx.moveTo(xOf(sf[o]), oy); else ctx.lineTo(xOf(sf[o]), oy)
                 }
                 ctx.strokeStyle = rgba(root.accent, 0.55)

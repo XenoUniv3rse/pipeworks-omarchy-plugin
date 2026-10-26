@@ -107,15 +107,31 @@ class Mixer:
         return [self.capture_ports_for_source(src) for src in self.input_sources(inp)]
 
     def effects_active(self, inp):
-        """Whether this input's audio should travel through a filter chain.
+        """Whether this input's audio should travel through a filter chain -
+        for its effects, its EQ, or both.
 
         Only while the chain is actually running: one that failed to start
         is bypassed, so the strip keeps working without its effects rather
         than going silent.
         """
         return (bool(self._filters)
-                and bool(effects_module.enabled_effects(inp.get("effects")))
+                and (bool(effects_module.enabled_effects(inp.get("effects")))
+                     or eq_module.active(inp.get("eq")))
                 and self._filters.running(inp["id"]))
+
+    def _input_graph(self, inp):
+        """(nodes, links, io) for an input's chain: its effects, then its EQ.
+
+        The EQ comes last so it shapes what the effects produce - after noise
+        suppression and the gate - which is what an app recording the input
+        receives. io is only given when an EQ is present: an effects-only
+        chain renders exactly as it always has, so it is not restarted.
+        """
+        nodes, links = effects_module.build_graph(inp.get("effects"), INPUT)
+        if not eq_module.active(inp.get("eq")):
+            return nodes, links, None
+        nodes, links = eq_module.append_to(nodes, links, inp["eq"])
+        return nodes, links, eq_module.graph_io(nodes)
 
     def input_destination(self, inp):
         """Where an input's microphones feed: its effects chain, or its sink.
@@ -936,42 +952,56 @@ class Mixer:
             description=f"Pipeworks {channel['label']} EQ",
         )
 
-    def set_eq(self, chan_id, settings_):
-        """Replaces a channel's EQ.
+    def set_eq(self, strip_id, settings_):
+        """Replaces a channel's or an input's EQ.
 
         Moving a band is applied live to the running chain; only a change of
         shape - a band's type, a band on or off, the EQ bypassed - rebuilds
-        it, which briefly interrupts this one channel.
+        it, which briefly interrupts this one strip. On an input that is the
+        microphone's whole chain, effects included.
         """
-        channel = self.channels_by_id.get(chan_id)
-        if channel is None:
+        is_input = strip_id in self.inputs_by_id
+        strip = self.inputs_by_id.get(strip_id) or self.channels_by_id.get(strip_id)
+        if strip is None:
             return
         new = eq_module.normalize(settings_)
-        old = eq_module.normalize(channel.get("eq") or eq_module.default_eq())
+        old = eq_module.normalize(strip.get("eq") or eq_module.default_eq())
         if eq_module.structure(old) != eq_module.structure(new):
-            self._unlink_channel(chan_id)
-            channel["eq"] = new
+            if is_input:
+                self._rewire_input(strip)
+            else:
+                self._unlink_channel(strip_id)
+            strip["eq"] = new
             self._repository.save(self.config)
             self.apply_all()
         else:
-            channel["eq"] = new
-            if self.eq_active(chan_id):
+            strip["eq"] = new
+            running = self.effects_active(strip) if is_input else self.eq_active(strip_id)
+            if running:
                 before = eq_module.live_controls(old)
                 changed = {
                     port: value for port, value in eq_module.live_controls(new).items()
                     if before.get(port) != value
                 }
-                self._filters.set_controls(chan_id, changed)
-            self._throttled(("eq", chan_id), lambda: self._persist_eq(chan_id))
+                self._filters.set_controls(strip_id, changed)
+            self._throttled(("eq", strip_id), lambda: self._persist_eq(strip_id))
         self.on_state_changed()
 
-    def _persist_eq(self, chan_id):
+    def _persist_eq(self, strip_id):
         self._repository.save(self.config)
-        channel = self.channels_by_id.get(chan_id)
-        if channel and self._filters and self.eq_active(chan_id):
+        if not self._filters:
+            return
+        inp = self.inputs_by_id.get(strip_id)
+        if inp is not None:
+            if self.effects_active(inp):
+                nodes, links, io = self._input_graph(inp)
+                self._filters.record_graph(strip_id, inp["label"], nodes, links, io)
+            return
+        channel = self.channels_by_id.get(strip_id)
+        if channel and self.eq_active(strip_id):
             nodes, links = eq_module.build_graph(channel["eq"])
             self._filters.record_graph(
-                chan_id, channel["label"], nodes, links, eq_module.graph_io(nodes),
+                strip_id, channel["label"], nodes, links, eq_module.graph_io(nodes),
                 description=f"Pipeworks {channel['label']} EQ",
             )
 
@@ -1068,7 +1098,8 @@ class Mixer:
             # Start or stop this strip's effects chain before linking anything,
             # so the nodes the links point at already exist.
             if self._filters:
-                self._filters.apply(input_id, inp["label"], inp.get("effects"))
+                nodes, links, io = self._input_graph(inp)
+                self._filters.apply_graph(input_id, inp["label"], nodes, links, io)
             dest_l, dest_r = self.input_destination(inp)
             for source in self.input_sources(inp):
                 capture_l, capture_r = self.capture_ports_for_source(source)

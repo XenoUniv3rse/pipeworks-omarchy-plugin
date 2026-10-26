@@ -147,10 +147,10 @@ Rectangle {
           onClicked: if (!isDefault) root.model.setDefaultChannel(root.stripId)
         }
 
-        // Channels only: opens the channel's EQ tuner, beside its settings.
-        // Lit in the channel's colour while the EQ is on.
+        // Channels and inputs: opens the strip's EQ tuner, beside its
+        // settings. Lit in the strip's colour while the EQ is on.
         Button {
-          visible: root.isChannel
+          visible: root.isChannel || root.kind === "input"
           readonly property bool eqOn: root.model.eqEnabled(root.stripId)
           text: "EQ"
           fontSize: Style.font.caption
