@@ -18,6 +18,7 @@ Rectangle {
   property Item dragLayer: null
 
   signal settingsRequested()
+  signal eqRequested()
 
   readonly property bool isOutput: kind === "output"
   readonly property bool isChannel: kind === "channel"
@@ -122,34 +123,58 @@ Rectangle {
         elide: Text.ElideRight
       }
 
-      // Where newly started applications land. Lit on the channel that is
-      // the default; clicking another moves the default there.
-      Button {
-        visible: root.isChannel
-        readonly property bool isDefault: root.model.defaultSink === root.sinkName
-        // md-star (U+F04CE) / md-star_outline (U+F04D2)
-        iconText: isDefault ? "\u{f04ce}" : "\u{f04d2}"
-        iconSize: Style.font.bodySmall
-        horizontalPadding: Style.space(3)
-        verticalPadding: Style.space(2)
-        foreground: isDefault ? root.accent : Util.alpha(Color.foreground, 0.3)
-        fontFamily: Style.font.family
-        tooltipText: isDefault
-          ? "New apps play into " + root.stripLabel
-          : "Make new apps play into " + root.stripLabel
-        onClicked: if (!isDefault) root.model.setDefaultChannel(root.stripId)
-      }
+      // The header's controls, packed tight: the channel's name needs the
+      // room more than they need the space between them.
+      RowLayout {
+        Layout.fillHeight: false
+        spacing: 0
 
-      Button {
-        // md-cog (U+F0493)
-        iconText: "\u{f0493}"
-        iconSize: Style.font.bodySmall
-        horizontalPadding: Style.space(4)
-        verticalPadding: Style.space(2)
-        foreground: Util.alpha(Color.foreground, 0.55)
-        fontFamily: Style.font.family
-        tooltipText: "Settings for " + root.stripLabel
-        onClicked: root.settingsRequested()
+        // Where newly started applications land. Lit on the channel that is
+        // the default; clicking another moves the default there.
+        Button {
+          visible: root.isChannel
+          readonly property bool isDefault: root.model.defaultSink === root.sinkName
+          // md-star (U+F04CE) / md-star_outline (U+F04D2)
+          iconText: isDefault ? "\u{f04ce}" : "\u{f04d2}"
+          iconSize: Style.font.bodySmall
+          horizontalPadding: Style.space(2)
+          verticalPadding: Style.space(2)
+          foreground: isDefault ? root.accent : Util.alpha(Color.foreground, 0.3)
+          fontFamily: Style.font.family
+          tooltipText: isDefault
+            ? "New apps play into " + root.stripLabel
+            : "Make new apps play into " + root.stripLabel
+          onClicked: if (!isDefault) root.model.setDefaultChannel(root.stripId)
+        }
+
+        // Channels only: opens the channel's EQ tuner, beside its settings.
+        // Lit in the channel's colour while the EQ is on.
+        Button {
+          visible: root.isChannel
+          readonly property bool eqOn: root.model.eqEnabled(root.stripId)
+          text: "EQ"
+          fontSize: Style.font.caption
+          horizontalPadding: Style.space(2)
+          verticalPadding: Style.space(1)
+          bordered: eqOn
+          active: eqOn
+          foreground: eqOn ? root.accent : Util.alpha(Color.foreground, 0.55)
+          fontFamily: Style.font.family
+          tooltipText: "Equaliser for " + root.stripLabel + (eqOn ? " (on)" : " (off)")
+          onClicked: root.eqRequested()
+        }
+
+        Button {
+          // md-cog (U+F0493)
+          iconText: "\u{f0493}"
+          iconSize: Style.font.bodySmall
+          horizontalPadding: Style.space(2)
+          verticalPadding: Style.space(2)
+          foreground: Util.alpha(Color.foreground, 0.55)
+          fontFamily: Style.font.family
+          tooltipText: "Settings for " + root.stripLabel
+          onClicked: root.settingsRequested()
+        }
       }
     }
 

@@ -81,7 +81,7 @@ class TriggerListener:
         return [
             shutil.which("pw-record") or "pw-record",
             "--target", self.sink, "-P", props,
-            "--rate", str(_RATE), "--channels", "1", "--format", "s16", "-",
+            "--raw", "--rate", str(_RATE), "--channels", "1", "--format", "s16", "-",
         ]
 
     def _read(self):

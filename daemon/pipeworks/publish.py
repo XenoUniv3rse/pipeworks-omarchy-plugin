@@ -19,6 +19,7 @@ import tempfile
 
 from . import settings
 from .audio import effects as effects_module
+from .audio import eq as eq_module
 from .midi.controller import probe_ports
 
 
@@ -97,6 +98,8 @@ class StatePublisher:
             # rather than hardcoded in the window, so the two cannot disagree
             # about what a slider means.
             "effects": effects_module.catalogue(),
+            # Band types, ranges and the built-in presets, for the EQ tuner.
+            "eq": eq_module.catalogue(),
             # Channels stepping aside for their trigger right now.
             "ducked": self._mixer.ducked_channels(),
             "status": self._status,

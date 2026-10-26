@@ -91,6 +91,8 @@ DEFAULT_CONFIG = {
     # Saved mixes: levels, mutes, solos and routing, recalled in one go. Each is
     # {"id", "label"} plus one entry per store in audio.mixer.SCENE_STORES.
     "scenes": [],
+    # EQ presets saved by you. The built-in ones live in audio.eq.PRESETS.
+    "eq_presets": [],
     # Control-surface bindings.
     "midi": {
         "volume_cc": {"system": 41, "game": 42, "music": 43, "browser": 44, "chat": 45, "mic": 40},

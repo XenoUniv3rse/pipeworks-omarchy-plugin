@@ -153,8 +153,22 @@ Item {
   }
 
   function restartDaemon() {
-    stopDaemon()
-    Qt.callLater(root.startDaemon)
+    if (daemon.running) {
+      stopDaemon()
+      Qt.callLater(root.startDaemon)
+      return
+    }
+    // Not our child: a plugin reload replaced the instance that started it.
+    // Ask it to quit over the bus; the liveness probe starts a fresh one.
+    quitter.running = true
+  }
+
+  Process {
+    id: quitter
+    command: ["gdbus", "call", "--session",
+      "--dest", root.busName, "--object-path", root.busPath,
+      "--method", "org.gtk.Actions.Activate", "quit", "[]", "{}"]
+    onExited: probe.restart()
   }
 
   Process {

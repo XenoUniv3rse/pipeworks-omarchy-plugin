@@ -32,6 +32,13 @@ without:
 sudo pacman -S noise-suppression-for-voice lsp-plugins-lv2 swh-plugins
 ```
 
+The EQ tuner's live spectrum needs numpy, and only the spectrum does - the EQ
+itself works without it:
+
+```sh
+sudo pacman -S python-numpy
+```
+
 The daemon draws nothing itself, so it needs no GUI toolkit — `python-gobject`
 is there for GLib and its session-bus plumbing, not for GTK.
 
@@ -132,6 +139,54 @@ gdbus call --session --dest io.github.pipeworks.Pipeworks \
 Scene ids are made from the name when it is saved (`Gaming` → `gaming`) and
 stay the same if it is renamed, which is what makes them safe to bind to a
 key.
+
+## EQ
+
+Every channel card has an **EQ** button, lit while that channel's EQ is on. It
+opens the tuner:
+
+* **The curve.** Drag a numbered handle to move a band in frequency and gain,
+  scroll over it to make it wider or narrower (Q), right-click it to switch it
+  off and on, and double-click empty space to add a band there. The thick line
+  is the shape the bands make; a dashed line shows the result with the preamp
+  when the preamp is not at 0.
+* **Bands.** Up to ten, each a bell, low or high shelf, low or high cut, notch
+  or band-pass. Pick one from the row under the curve to edit it exactly:
+  type, on/off, and frequency, gain and Q, each a slider with a value you can
+  click and type into (`2.5k` works for frequency).
+* **Spectrum.** What the channel is playing, live: grey before the EQ, in the
+  channel's colour after it. **Tilt** leans it 3 dB per octave so a balanced
+  mix reads level. The scale on the right is dBFS.
+* **Presets.** Flat, Bass boost, Bass cut, Treble boost, Loudness, Vocal
+  clarity, Podcast, Gaming footsteps, Cinema, Night mode, Warm and Bright, plus
+  any you save yourself (marked ★, deletable). The picker shows which preset
+  the EQ currently matches, or Custom.
+* **Preamp.** Boosting can clip. The tuner shows the curve's highest point and
+  warns when it is above 0 dB; **Auto** lowers the preamp until it is not.
+* **On / Bypassed** compares against the untouched sound.
+
+Each channel's EQ is its own filter chain between the channel and its outputs,
+so it shapes that channel wherever it is routed. Moving a band is applied live,
+without a sound; changing a band's type, switching a band on or off, or
+bypassing restarts that one channel's chain, which is a brief blip.
+
+The curve is computed from the same filter formulas PipeWire uses - checked
+against measured impulse responses of the real filters - so it is what you
+hear, not an approximation. One thing worth knowing: PipeWire takes a shelf's
+Q as a true Q, so 0.7 is a plain shelf and higher values add a bump either
+side of the corner.
+
+The spectrum comes from `daemon/spectrum.py`, which the tuner runs only while
+it is open: a mono capture of the channel at 48 kHz, an 8192-point FFT about
+thirty times a second, folded into 120 bands from 20 Hz to 20 kHz.
+
+```sh
+# The whole EQ travels as JSON: {"enabled", "preamp", "bands": [{"type", "freq", "gain", "q", "enabled"}]}
+gdbus call --session --dest io.github.pipeworks.Pipeworks \
+  --object-path /io/github/pipeworks/Pipeworks \
+  --method org.gtk.Actions.Activate "set-eq" \
+  "[<('music', '{\"enabled\": true, \"preamp\": -4, \"bands\": [{\"type\": \"lowshelf\", \"freq\": 100, \"gain\": 4, \"q\": 0.7}]}')>]" "{}"
+```
 
 ## Ducking
 
@@ -262,6 +317,9 @@ name or its id.
   high-pass, gate, compressor, three-band tone and reverb, switched on
   individually and adjusted while you listen. Switching one on briefly
   interrupts that strip; moving a control does not.
+* **Channel EQ** — a parametric equaliser on every channel, each tuned
+  independently: up to ten bands of seven types, a preamp, presets of its own
+  and yours, and a live spectrum of what the channel is playing.
 * **Output effects** — high-pass, compressor, three-band tone and a limiter on
   any physical output, processing everything played through that device. Tune
   the room speakers differently from the headset, or keep a ceiling on both.
@@ -293,9 +351,12 @@ AppChip.qml        a running application, draggable between channels
 StripSettings.qml  rename, device, microphones, effects, MIDI Learn, remove
 SceneSettings.qml  save, rename, update, bind and delete a scene
 LearnRow.qml       one MIDI Learn row, shared by both dialogs
+EqTuner.qml        a channel's EQ: curve, bands, spectrum, presets
+EqMath.js          the EQ's frequency response, for drawing it
 AddStrip.qml       add a channel, input or output
 daemon/            the audio brain — no window, no toolkit
   run.py           launcher
+  spectrum.py      live spectrum for the EQ tuner, run only while it is open
   pipeworks/       audio domain, PipeWire adapters, MIDI, effects, published state
 ```
 
@@ -327,9 +388,10 @@ An input's microphones: `add-input-source`, `remove-input-source`,
 `set-input-source-volume`. These need no reprovisioning — the sources all feed
 one virtual sink that already exists, so adding one is only extra links and does
 not interrupt audio the way adding a whole input does.
+Channel EQ: `set-eq`, `save-eq-preset`, `remove-eq-preset`.
 Effects: `set-effect-enabled`, `set-effect-control`.
 Control surface: `midi-learn`, `midi-learn-cancel`, `midi-unbind`, `set-midi-port`.
-Housekeeping: `set-autostart`, `set-state-watch`, `show-window`.
+Housekeeping: `set-autostart`, `set-state-watch`, `show-window`, `quit`.
 
 What a front end needs to *read* rather than command does not fit an action, so
 the daemon publishes it as `~/.config/pipeworks/state.json`: running

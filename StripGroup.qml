@@ -19,6 +19,7 @@ ColumnLayout {
   property real stripWidth: Style.space(132)
 
   signal settingsRequested(string kind, var entity)
+  signal eqRequested(var entity)
 
   visible: root.entities.length > 0
   spacing: Style.space(8)
@@ -54,6 +55,7 @@ ColumnLayout {
           ? root.model.accentFor(root.model.channelIndex(String(modelData.id)))
           : Color.accent
         onSettingsRequested: root.settingsRequested(root.kind, modelData)
+        onEqRequested: root.eqRequested(modelData)
       }
     }
   }

@@ -11,6 +11,7 @@ import time
 
 from .. import settings
 from . import effects as effects_module
+from . import eq as eq_module
 from .ducking import duck_amount
 
 CHANNEL = "channel"
@@ -202,6 +203,8 @@ class Mixer:
         self._forget_route_bindings(lambda key: key.startswith(f"{chan_id}:"))
         self._forget_in_scenes(chan_id)
         self._forget_duck_trigger(chan_id)
+        if self._filters:
+            self._filters.forget(chan_id)
         self._reprovision()
         self.on_ducking_changed()
 
@@ -872,16 +875,151 @@ class Mixer:
         self.set_route(chan_id, out_id, not self.config["routes"][chan_id][out_id])
 
     def strip_output_ports(self, strip_id):
-        """The outward-facing ports of a strip's loopback.
+        """The outward-facing ports of a strip - where its routes start.
 
         A channel's loopback is a plain stream and names them output_*; an
         input's is published as an Audio/Source and names them capture_*, so an
-        input's are resolved rather than assumed.
+        input's are resolved rather than assumed. A channel whose EQ is on
+        reaches its outputs through the EQ chain instead.
         """
         sink = self.sink_for(strip_id)
         if strip_id in self.inputs_by_id:
             return self._backend.node_output_ports(f"{sink}_out")
+        if self.eq_active(strip_id):
+            node = self._filters.output_node(strip_id)
+            return f"{node}:output_FL", f"{node}:output_FR"
         return f"{sink}_out:output_FL", f"{sink}_out:output_FR"
+
+    # ------------------------------------------------------------------
+    # Channel EQ
+    #
+    # A channel's EQ is a filter chain of its own between the channel's
+    # loopback and every output it is routed to. Frequency, gain, Q and preamp
+    # are live controls on it; anything else changes the graph and restarts it.
+
+    def channel_eq(self, chan_id):
+        channel = self.channels_by_id.get(chan_id) or {}
+        return channel.get("eq") or eq_module.default_eq()
+
+    def eq_active(self, chan_id):
+        """Whether the channel is playing through its EQ right now.
+
+        Only while the chain actually runs: one that failed to start is
+        bypassed, so the channel keeps playing - unequalised - instead of
+        going silent.
+        """
+        channel = self.channels_by_id.get(chan_id)
+        return (bool(self._filters) and channel is not None
+                and eq_module.active(channel.get("eq"))
+                and self._filters.running(chan_id))
+
+    def eq_head_links(self, chan_id):
+        """The links feeding a channel's loopback into its EQ."""
+        if not self.eq_active(chan_id):
+            return []
+        sink = self.channels_by_id[chan_id]["sink"]
+        node = self._filters.input_node(chan_id)
+        return [
+            (f"{sink}_out:output_FL", f"{node}:input_FL"),
+            (f"{sink}_out:output_FR", f"{node}:input_FR"),
+        ]
+
+    def _apply_eq_chain(self, channel):
+        if not self._filters:
+            return
+        settings_ = channel.get("eq")
+        nodes, links = (eq_module.build_graph(settings_) if eq_module.active(settings_)
+                        else ([], []))
+        self._filters.apply_graph(
+            channel["id"], channel["label"], nodes, links,
+            eq_module.graph_io(nodes) if nodes else None,
+            description=f"Pipeworks {channel['label']} EQ",
+        )
+
+    def set_eq(self, chan_id, settings_):
+        """Replaces a channel's EQ.
+
+        Moving a band is applied live to the running chain; only a change of
+        shape - a band's type, a band on or off, the EQ bypassed - rebuilds
+        it, which briefly interrupts this one channel.
+        """
+        channel = self.channels_by_id.get(chan_id)
+        if channel is None:
+            return
+        new = eq_module.normalize(settings_)
+        old = eq_module.normalize(channel.get("eq") or eq_module.default_eq())
+        if eq_module.structure(old) != eq_module.structure(new):
+            self._unlink_channel(chan_id)
+            channel["eq"] = new
+            self._repository.save(self.config)
+            self.apply_all()
+        else:
+            channel["eq"] = new
+            if self.eq_active(chan_id):
+                before = eq_module.live_controls(old)
+                changed = {
+                    port: value for port, value in eq_module.live_controls(new).items()
+                    if before.get(port) != value
+                }
+                self._filters.set_controls(chan_id, changed)
+            self._throttled(("eq", chan_id), lambda: self._persist_eq(chan_id))
+        self.on_state_changed()
+
+    def _persist_eq(self, chan_id):
+        self._repository.save(self.config)
+        channel = self.channels_by_id.get(chan_id)
+        if channel and self._filters and self.eq_active(chan_id):
+            nodes, links = eq_module.build_graph(channel["eq"])
+            self._filters.record_graph(
+                chan_id, channel["label"], nodes, links, eq_module.graph_io(nodes),
+                description=f"Pipeworks {channel['label']} EQ",
+            )
+
+    def _unlink_channel(self, chan_id):
+        """Tears down a channel's routes and EQ links, for apply_all to rebuild.
+
+        Both possible starting points are cleared - the loopback and the EQ's
+        output - because the EQ is about to be switched one way or the other,
+        and a stale link would leave the old path playing alongside the new.
+        """
+        sink = self.channels_by_id[chan_id]["sink"]
+        sources = [(f"{sink}_out:output_FL", f"{sink}_out:output_FR")]
+        if self._filters:
+            node_in = self._filters.input_node(chan_id)
+            node_out = self._filters.output_node(chan_id)
+            sources.append((f"{node_out}:output_FL", f"{node_out}:output_FR"))
+            self._backend.disconnect(f"{sink}_out:output_FL", f"{node_in}:input_FL")
+            self._backend.disconnect(f"{sink}_out:output_FR", f"{node_in}:input_FR")
+        for out_id in self.outputs_by_id:
+            if not self.config["routes"].get(chan_id, {}).get(out_id):
+                continue
+            dest_l, dest_r = self.output_destination(out_id)
+            for source_l, source_r in sources:
+                self._backend.disconnect(source_l, dest_l)
+                self._backend.disconnect(source_r, dest_r)
+
+    def save_eq_preset(self, label, settings_):
+        """Keeps an EQ as a named preset of your own. Returns its id."""
+        presets = self.config.setdefault("eq_presets", [])
+        base = "user_" + ("".join(c if c.isalnum() else "_" for c in label.lower()).strip("_") or "preset")
+        taken = {p.get("id") for p in presets}
+        preset_id, suffix = base, 2
+        while preset_id in taken:
+            preset_id = f"{base}_{suffix}"
+            suffix += 1
+        clean = eq_module.normalize(settings_)
+        presets.append({"id": preset_id, "label": label,
+                        "preamp": clean["preamp"], "bands": clean["bands"]})
+        self._repository.save(self.config)
+        self.on_state_changed()
+        return preset_id
+
+    def remove_eq_preset(self, preset_id):
+        self.config["eq_presets"] = [
+            p for p in self.config.get("eq_presets", []) if p.get("id") != preset_id
+        ]
+        self._repository.save(self.config)
+        self.on_state_changed()
 
     def _apply_route(self, chan_id, out_id):
         enabled = self.config["routes"][chan_id][out_id]
@@ -915,6 +1053,11 @@ class Mixer:
             chan_id = chan["id"]
             self._backend.set_sink_volume(chan["sink"], self.applied_volume(chan_id))
             self._apply_mute(chan_id)
+            # The EQ before the routes: they start from its output when it
+            # is on, and that node has to exist before a link to it is made.
+            self._apply_eq_chain(chan)
+            for source, dest in self.eq_head_links(chan_id):
+                self._backend.connect(source, dest)
             for out_id in self.outputs_by_id:
                 self._apply_route(chan_id, out_id)
 
@@ -956,6 +1099,8 @@ class Mixer:
                     links.add((source_r, dest_r))
         for out_id in self.outputs_by_id:
             links.update(self.output_tail_links(out_id))
+        for chan in self.config["channels"]:
+            links.update(self.eq_head_links(chan["id"]))
         for inp in self.config["inputs"]:
             dest_l, dest_r = self.input_destination(inp)
             for capture_l, capture_r in self.capture_ports_for_input(inp):

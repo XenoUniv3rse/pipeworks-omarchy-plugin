@@ -511,6 +511,57 @@ QtObject {
     return out
   }
 
+  // ------------------------------------------------------------------ EQ
+
+  // Band types, ranges and built-in presets, as the daemon describes them.
+  readonly property var eqCatalogue: state.eq || ({
+    maxBands: 10, types: ["peaking", "lowshelf", "highshelf", "highpass", "lowpass", "notch", "bandpass"],
+    gainTypes: ["peaking", "lowshelf", "highshelf"], presets: [],
+    limits: { freq: [20, 20000], gain: [-24, 24], q: [0.1, 18], preamp: [-24, 12] }
+  })
+  readonly property var eqBuiltinPresets: root.eqCatalogue.presets instanceof Array ? root.eqCatalogue.presets : []
+  readonly property var eqUserPresets: config.eq_presets instanceof Array ? config.eq_presets : []
+
+  function flatBands() {
+    var flat = null
+    for (var i = 0; i < root.eqBuiltinPresets.length; i++)
+      if (root.eqBuiltinPresets[i].id === "flat") flat = root.eqBuiltinPresets[i]
+    return flat ? JSON.parse(JSON.stringify(flat.bands)) : [
+      { type: "lowshelf", freq: 80, gain: 0, q: 0.7, enabled: true },
+      { type: "peaking", freq: 250, gain: 0, q: 1, enabled: true },
+      { type: "peaking", freq: 1000, gain: 0, q: 1, enabled: true },
+      { type: "peaking", freq: 4000, gain: 0, q: 1, enabled: true },
+      { type: "highshelf", freq: 10000, gain: 0, q: 0.7, enabled: true }
+    ]
+  }
+
+  // A channel's EQ as a fresh object the caller may edit. Off and flat for a
+  // channel that never had one.
+  function eqFor(chanId) {
+    var entity = root.entityFor("channel", chanId)
+    if (entity && entity.eq) return JSON.parse(JSON.stringify(entity.eq))
+    return { enabled: false, preamp: 0, bands: root.flatBands() }
+  }
+
+  function eqEnabled(chanId) {
+    var entity = root.entityFor("channel", chanId)
+    return !!(entity && entity.eq && entity.eq.enabled)
+  }
+
+  // Coalesced like a fader: a dragged band would otherwise send a call per
+  // frame. Only the newest EQ per channel is ever sent.
+  function setEq(chanId, eq) {
+    root.pending["eq:" + chanId] = { kind: "eq", id: chanId, value: JSON.stringify(eq) }
+    root._flushTimer.running = true
+  }
+
+  function saveEqPreset(label, eq) {
+    root.activate("save-eq-preset", "[<(" + root.quoted(label) + ", "
+      + root.quoted(JSON.stringify(eq)) + ")>]")
+  }
+
+  function removeEqPreset(id) { root.activate("remove-eq-preset", "[<" + root.quoted(id) + ">]") }
+
   // --------------------------------------------------------------- ducking
 
   function duckFor(chanId) {
@@ -633,7 +684,9 @@ QtObject {
       for (var key in root.pending) {
         var entry = root.pending[key]
         delete root.pending[key]
-        if (entry.kind === "effect")
+        if (entry.kind === "eq")
+          root.activate("set-eq", "[<(" + root.quoted(entry.id) + ", " + root.quoted(entry.value) + ")>]")
+        else if (entry.kind === "effect")
           root.setEffectControl(entry.id, entry.effect, entry.control, entry.value)
         else if (entry.kind === "source")
           root.setInputSourceVolume(entry.id, entry.source, entry.value)

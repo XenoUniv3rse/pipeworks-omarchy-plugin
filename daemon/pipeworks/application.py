@@ -28,6 +28,7 @@ structural operations that reprovision PipeWire. What a front end needs to
 *read* rather than command does not fit an action at all, and is published as
 JSON by publish.StatePublisher instead.
 """
+import json
 import subprocess
 
 from gi.repository import Gio, GLib
@@ -125,6 +126,10 @@ class PipeworksApplication(Gio.Application):
             ("add-input-source", "(ss)", self._on_add_input_source),
             ("remove-input-source", "(ss)", self._on_remove_input_source),
             ("set-input-source-volume", "(ssd)", self._on_set_input_source_volume),
+            # Channel EQ
+            ("set-eq", "(ss)", self._on_set_eq),
+            ("save-eq-preset", "(ss)", self._on_save_eq_preset),
+            ("remove-eq-preset", "s", self._on_remove_eq_preset),
             # Effects
             ("set-effect-enabled", "(ssb)", self._on_set_effect_enabled),
             ("set-effect-control", "(sssd)", self._on_set_effect_control),
@@ -136,6 +141,7 @@ class PipeworksApplication(Gio.Application):
             ("set-autostart", "b", self._on_set_autostart),
             ("set-state-watch", "b", self._on_set_state_watch),
             ("show-window", None, self._on_show_window),
+            ("quit", None, self._on_quit),
         )
         for name, signature, handler in specs:
             parameter_type = GLib.VariantType.new(signature) if signature else None
@@ -370,6 +376,37 @@ class PipeworksApplication(Gio.Application):
             self._mixer().set_effect_control(strip_id, effect_id, control_id, value)
 
     # ------------------------------------------------------------------
+    # Channel EQ
+    #
+    # The whole EQ travels as one JSON string: it is a list of bands, and
+    # spelling that out as a GVariant type for gdbus on the command line
+    # would be far more fragile than parsing it here.
+
+    def _parse_eq(self, raw):
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def _on_set_eq(self, _action, parameter):
+        chan_id, raw = parameter.unpack()
+        settings_ = self._parse_eq(raw)
+        if settings_ is not None and self._entity("channel", chan_id):
+            self._mixer().set_eq(chan_id, settings_)
+
+    def _on_save_eq_preset(self, _action, parameter):
+        label, raw = parameter.unpack()
+        settings_ = self._parse_eq(raw)
+        if settings_ is not None and label.strip():
+            self._mixer().save_eq_preset(label.strip(), settings_)
+            self._republish()
+
+    def _on_remove_eq_preset(self, _action, parameter):
+        self._mixer().remove_eq_preset(parameter.unpack())
+        self._republish()
+
+    # ------------------------------------------------------------------
     # Control surface
 
     def _on_midi_learn(self, _action, parameter):
@@ -399,6 +436,16 @@ class PipeworksApplication(Gio.Application):
 
     def _on_show_window(self, _action, _parameter):
         self.present_window()
+
+    def _on_quit(self, _action, _parameter):
+        """Stops the daemon cleanly - effect chains and listeners included.
+
+        How a supervisor restarts a daemon it did not start itself: after a
+        plugin reload, the running daemon belongs to a supervisor instance
+        that no longer exists, so there is no child process to stop.
+        """
+        self.release()
+        self.quit()
 
     def present_window(self):
         """Asks the shell to summon the mixer window.

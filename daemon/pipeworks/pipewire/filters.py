@@ -59,7 +59,7 @@ context.modules = [
                 ]
                 links = [
 {links}
-                ]
+                ]{io}
             }}
             audio.channels = 2
             audio.position = [ FL FR ]
@@ -91,6 +91,10 @@ class FilterChainHost:
         # few seconds by the watchdog, cutting the strip each time.
         self._failed = {}
         self.on_failed = lambda strip_id: None
+        # Graph id of each running chain's control node. Looked up once per
+        # start: finding it means a full pw-dump, far too slow to repeat for
+        # every step of a dragged slider.
+        self._node_ids = {}
         self.clear_strays()
 
     def clear_strays(self):
@@ -126,12 +130,22 @@ class FilterChainHost:
         whether to route through it or straight past it.
         """
         nodes, links = effects_module.build_graph(strip_effects, kind)
+        return self.apply_graph(strip_id, label, nodes, links)
+
+    def apply_graph(self, strip_id, label, nodes, links, io=None, description=None):
+        """apply(), for a graph built by the caller rather than from effects.
+
+        io is an optional (inputs, outputs) pair of "node:port" names. It is
+        needed whenever the first node has more inputs than the chain does -
+        a builtin mixer has eight - or filter-chain takes all of them as the
+        chain's inputs and the audio goes nowhere.
+        """
         if not nodes:
             self.stop(strip_id)
             self._failed.pop(strip_id, None)
             return False
 
-        wanted = self._render(strip_id, label, nodes, links)
+        wanted = self._render(strip_id, label, nodes, links, io, description)
         if self._failed.get(strip_id) == wanted:
             return False
         existing = self._read(self.conf_path(strip_id))
@@ -148,6 +162,17 @@ class FilterChainHost:
                 return False
         self._failed.pop(strip_id, None)
         return True
+
+    def record_graph(self, strip_id, label, nodes, links, io=None, description=None):
+        """Brings a running chain's config file up to date without restarting.
+
+        For values already applied live: the file is what apply() compares
+        against, and a stale one would make the next apply restart the chain
+        to "change" settings it is already playing with.
+        """
+        if self.running(strip_id) and nodes:
+            self._write(self.conf_path(strip_id),
+                        self._render(strip_id, label, nodes, links, io, description))
 
     def failed(self, strip_id):
         return strip_id in self._failed
@@ -189,6 +214,7 @@ class FilterChainHost:
         )
 
     def stop(self, strip_id):
+        self._node_ids.pop(strip_id, None)
         process = self._processes.pop(strip_id, None)
         if process is None or process.poll() is not None:
             return
@@ -214,13 +240,29 @@ class FilterChainHost:
 
     def set_control(self, strip_id, port, value):
         """Sets one control port on a running chain, without restarting it."""
-        node_id = self._node_id(self.input_node(strip_id))
-        if node_id is None:
+        return self.set_controls(strip_id, {port: value})
+
+    def set_controls(self, strip_id, controls):
+        """Sets several control ports at once, in one call.
+
+        controls maps "<node>:<port>" to a number.
+        """
+        if not controls or not self.running(strip_id):
             return False
-        self._runner.run(
-            "pw-cli", "s", str(node_id), "Props",
-            '{ params = [ "%s" %s ] }' % (port, float(value)),
+        node_id = self._node_ids.get(strip_id)
+        if node_id is None:
+            node_id = self._node_id(self.input_node(strip_id))
+            if node_id is None:
+                return False
+            self._node_ids[strip_id] = node_id
+        params = " ".join(f'"{port}" {float(value)!r}' for port, value in controls.items())
+        result = self._runner.run(
+            "pw-cli", "s", str(node_id), "Props", "{ params = [ %s ] }" % params
         )
+        if getattr(result, "returncode", 0) != 0:
+            # The chain was replaced under a stale id: look it up next time.
+            self._node_ids.pop(strip_id, None)
+            return False
         return True
 
     def _node_id(self, node_name):
@@ -241,17 +283,25 @@ class FilterChainHost:
 
     # ------------------------------------------------------------------
 
-    def _render(self, strip_id, label, nodes, links):
+    def _render(self, strip_id, label, nodes, links, io=None, description=None):
         rendered_nodes = "\n".join(self._node_block(node) for node in nodes)
         rendered_links = "\n".join(
             f'                    {{ output = "{source}:{source_port}" '
             f'input = "{dest}:{dest_port}" }}'
             for source, source_port, dest, dest_port in links
         )
+        rendered_io = ""
+        if io:
+            inputs, outputs = io
+            rendered_io = (
+                "\n                inputs = [ %s ]" % " ".join(f'"{p}"' for p in inputs)
+                + "\n                outputs = [ %s ]" % " ".join(f'"{p}"' for p in outputs)
+            )
         return _CONF_TEMPLATE.format(
-            description=f"Pipeworks {label} effects",
+            description=description or f"Pipeworks {label} effects",
             nodes=rendered_nodes,
             links=rendered_links,
+            io=rendered_io,
             in_node=self.input_node(strip_id),
             out_node=self.output_node(strip_id),
         )

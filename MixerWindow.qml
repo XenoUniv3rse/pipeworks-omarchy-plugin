@@ -27,21 +27,40 @@ Item {
   // or a scene to edit ("new" to save one):
   //   omarchy-shell shell summon pipeworks.mixer '{"settings":{"kind":"channel","id":"game"}}'
   //   omarchy-shell shell summon pipeworks.mixer '{"scene":"new"}'
+  //   omarchy-shell shell summon pipeworks.mixer '{"eq":"music"}'
   function open(payloadJson) {
     closingFromHost = false
     window.visible = true
     var payload = ({})
     try { payload = JSON.parse(String(payloadJson || "{}")) || ({}) } catch (error) {}
     if (payload.scene) root.openScene(String(payload.scene))
+    if (payload.eq) root.openEq(String(payload.eq))
     var target = payload.settings
     root.pendingSettings = target && target.kind && target.id ? target : null
     root.openPendingSettings()
+  }
+
+  // Where the plugin lives, for the spectrum helper the EQ tuner runs. The
+  // same derivation as Service.qml: third-party manifests lose __sourceDir.
+  readonly property string pluginDir: {
+    if (manifest && manifest.__sourceDir) return String(manifest.__sourceDir)
+    var id = manifest && manifest.id ? String(manifest.id) : "pipeworks.mixer"
+    return Quickshell.env("HOME") + "/.config/omarchy/plugins/" + id
+  }
+
+  function openEq(chanId) {
+    if (!mixer.entityFor("channel", chanId)) return
+    settings.close()
+    addStrip.close()
+    sceneSettings.close()
+    eqTuner.show(chanId)
   }
 
   // Only one overlay at a time: they share a layer.
   function openScene(sceneId) {
     settings.close()
     addStrip.close()
+    eqTuner.close()
     if (sceneId === "new") sceneSettings.showNew()
     else sceneSettings.show(sceneId)
   }
@@ -58,6 +77,7 @@ Item {
     root.pendingSettings = null
     addStrip.close()
     sceneSettings.close()
+    eqTuner.close()
     settings.show(kind, entity)
   }
 
@@ -190,7 +210,7 @@ Item {
               // Only one overlay at a time: they share a layer, so opening the
               // second on top of the first leaves two dialogs stacked with only
               // the upper one reachable.
-              onClicked: { settings.close(); sceneSettings.close(); addStrip.show() }
+              onClicked: { settings.close(); sceneSettings.close(); eqTuner.close(); addStrip.show() }
             }
           }
         }
@@ -355,6 +375,7 @@ Item {
               onSettingsRequested: function (kind, entity) {
                 addStrip.close()
                 sceneSettings.close()
+                eqTuner.close()
                 settings.show(kind, entity)
               }
             }
@@ -367,9 +388,11 @@ Item {
               dragLayer: dragLayer
               Layout.fillHeight: true
               Layout.alignment: Qt.AlignTop
+              onEqRequested: function (entity) { root.openEq(String(entity.id)) }
               onSettingsRequested: function (kind, entity) {
                 addStrip.close()
                 sceneSettings.close()
+                eqTuner.close()
                 settings.show(kind, entity)
               }
             }
@@ -385,6 +408,7 @@ Item {
               onSettingsRequested: function (kind, entity) {
                 addStrip.close()
                 sceneSettings.close()
+                eqTuner.close()
                 settings.show(kind, entity)
               }
             }
@@ -563,6 +587,13 @@ Item {
       AddStrip {
         id: addStrip
         model: mixer
+        z: 100
+      }
+
+      EqTuner {
+        id: eqTuner
+        model: mixer
+        spectrumScript: root.pluginDir + "/daemon/spectrum.py"
         z: 100
       }
 
